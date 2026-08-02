@@ -584,6 +584,13 @@ public:
             }
         }
 
+        // push from the SDL shadow when there is one, the fb mmap reads back uncached
+        {
+            SDL_Surface* fbs = m_fbScreen ? m_fbScreen : screen;
+            if (crt::active() && fbs && fbs->pixels && !(fbs->flags & SDL_HWSURFACE))
+                crt::setSource(fbs->pixels, (long)fbs->pitch, fbs->w, fbs->h);
+        }
+
         resW = screen->w; resH = screen->h;
         cfg.set(Configuration::SCREEN_WIDTH,  std::to_string(resW));
         cfg.set(Configuration::SCREEN_HEIGHT, std::to_string(resH));

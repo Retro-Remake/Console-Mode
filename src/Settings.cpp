@@ -941,9 +941,9 @@ std::vector<Settings::SettingRow> DevSettings::getDevSettings() {
 }
 
 void AppSettings::updateOverscan(bool increase) {
-    // 0..15% per edge, applied live and persisted
+    // 0..5% per edge, applied live and persisted
     int pct = 0; try { pct = std::stoi(settingsMap[Configuration::CRT_OVERSCAN].value); } catch (...) {}
-    if (increase)      { if (pct < 15) pct += 1; }
+    if (increase)      { if (pct < 5) pct += 1; }
     else               { if (pct > 0)  pct -= 1; }
     currentValue = std::to_string(pct) + "%";
     settingsMap[Configuration::CRT_OVERSCAN].value = currentValue;

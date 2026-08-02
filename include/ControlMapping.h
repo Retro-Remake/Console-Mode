@@ -32,6 +32,7 @@ public:
 
     int getControl(const std::string& controlName) const;
 
-    ControlMap convertCommand(const SDL_Event& event);
+    // fromPad: the event came from a gamepad, only those obey A/B swap
+    ControlMap convertCommand(const SDL_Event& event, bool fromPad = false);
 };
 

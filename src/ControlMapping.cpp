@@ -46,9 +46,10 @@ int ControlMapping::getControl(const std::string& controlName) const {
     }
 }
 
-ControlMap ControlMapping::convertCommand(const SDL_Event& event) {
-    // with A/B swap on, A backs out and B confirms
-    const bool swapAB = m_cfg.getBool(Configuration::AB_SWAP);
+ControlMap ControlMapping::convertCommand(const SDL_Event& event, bool fromPad) {
+    // pads send A/B as syms 13/27 too, so the swap keys off the source
+    const bool padSrc = fromPad || event.type == SDL_JOYBUTTONDOWN;
+    const bool swapAB = padSrc && m_cfg.getBool(Configuration::AB_SWAP);
     const ControlMap A_CMD = swapAB ? CMD_BACK : CMD_ENTER;
     const ControlMap B_CMD = swapAB ? CMD_ENTER : CMD_BACK;
     if (event.type == SDL_KEYDOWN) {
