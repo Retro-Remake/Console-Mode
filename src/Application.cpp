@@ -588,7 +588,9 @@ void Application::drawCurrentState() {
             for (int i = 0; i < m_evCount; i++) {
                 if (!m_evfd[i].isOpen) continue;
                 char l[224];
-                snprintf(l, sizeof l, "%04x:%04x  %s", m_evfd[i].vid, m_evfd[i].pid,
+                const char* node = strrchr(m_evfd[i].path, '/');
+                snprintf(l, sizeof l, "%s %04x:%04x  %s", node ? node + 1 : m_evfd[i].path,
+                         m_evfd[i].vid, m_evfd[i].pid,
                          m_evfd[i].name[0] ? m_evfd[i].name : "?");
                 devLines.push_back(l);
             }
@@ -634,7 +636,10 @@ void Application::drawCurrentState() {
                 if (joystickKeyState == 1){
                     const std::vector<KeyInfo> vecKeys = JsMapper.getKeys();
                     if (currentJoystickKeyIndex < (int)vecKeys.size())
-                        renderComponent.showTip("Press a button for " + vecKeys[currentJoystickKeyIndex].key);
+                        renderComponent.showTip((currentJoystickKeyIndex >= JoystickMapper::AXIS_LX_ROW
+                                                 ? "Tilt the stick for " : "Press a button for ")
+                                                + vecKeys[currentJoystickKeyIndex].key
+                                                + " (hold B to cancel)");
                 }
             }
             break;
@@ -2230,6 +2235,7 @@ void Application::handleCommand(ControlMap cmd) {
             } else if (cmd == CMD_ENTER) {
                 if (currentControlIndex==0){
                     JsMapper.findDevices();
+                    refreshHostDeviceMaps();
                     state.currentMenuLevel = MenuLevel::MENU_CONTROLS_JOY;
                     currentJoystickIndex = 0;
                     renderComponent.resetValues();
@@ -2260,7 +2266,7 @@ void Application::handleCommand(ControlMap cmd) {
                 }
             } else if (cmd == CMD_ENTER) {
                 if(vecDev.size()>0){
-                    JsMapper.loadFile(vecDev[currentJoystickIndex].vid_pid, vecDev[currentJoystickIndex].type);
+                    JsMapper.loadFile(vecDev[currentJoystickIndex].path, vecDev[currentJoystickIndex].type);
 
                     currentJoystickKeyIndex = 0;
                     joystickKeyState = 0;
@@ -2295,6 +2301,8 @@ void Application::handleCommand(ControlMap cmd) {
                     }
                 } else if (cmd == CMD_ENTER) {
                     joystickKeyState = 1;
+                    tipStartTime = 0;   // drop the previous "X set" tip, the prompt replaces it
+                    strtip.clear();
                     renderComponent.forceFullRedraw();
                     m_dirty = true;
                 }
@@ -2325,7 +2333,7 @@ void Application::handleCommand(ControlMap cmd) {
                     const DeviceInfo& d = vecDev[currentJoystickIndex];
                     std::string act = m_joyOptItems[m_joyOptIndex];
                     if (act == "Input Tester") {
-                        JsMapper.loadFile(d.vid_pid, d.type);   // load its codes so presses highlight
+                        JsMapper.loadFile(d.path, d.type);   // load its codes so presses highlight
                         m_joyTesterVid = m_joyTesterPid = 0;
                         sscanf(d.vid_pid.c_str(), "%hx_%hx", &m_joyTesterVid, &m_joyTesterPid);
                         m_joyPressed.clear(); m_joyHatX = 0; m_joyHatY = 0; m_joyEscSince = 0;
@@ -2333,7 +2341,7 @@ void Application::handleCommand(ControlMap cmd) {
                         renderComponent.forceFullRedraw();
                         m_dirty = true;
                     } else if (act == "Delete Mapping") {
-                        JsMapper.deleteMap(d.vid_pid);
+                        JsMapper.deleteMap(d.path);
                         launchMiSTerRR("@inputreload");
                         SetTip("Mapping deleted");
                         JsMapper.findDevices();
@@ -2807,17 +2815,44 @@ void Application::run() {
                         // capture buttons + d-pad from every device for a VID:PID readout
                         if (state.currentMenuLevel == MENU_INPUT_TESTER &&
                             ((ev.type == EV_KEY && ev.value != 2) ||
-                             (ev.type == EV_ABS && (ev.code == ABS_HAT0X || ev.code == ABS_HAT0Y)))) {
+                             (ev.type == EV_ABS && (ev.code == ABS_HAT0X || ev.code == ABS_HAT0Y ||
+                                                    ev.code == ABS_X || ev.code == ABS_Y ||
+                                                    ev.code == ABS_Z || ev.code == ABS_RZ ||
+                                                    ev.code == ABS_GAS || ev.code == ABS_BRAKE)))) {
                             char line[160];
+                            line[0] = 0;
+                            // node + id: two pads can share a vid:pid, the node is what differs
+                            const char* nd = strrchr(m_evfd[i].path, '/');
+                            char evTag[48];
+                            snprintf(evTag, sizeof evTag, "%s %04x:%04x",
+                                     nd ? nd + 1 : m_evfd[i].path, m_evfd[i].vid, m_evfd[i].pid);
                             if (ev.type == EV_KEY)
-                                snprintf(line, sizeof line, "%04x:%04x  BTN 0x%x (%d)  %s",
-                                         m_evfd[i].vid, m_evfd[i].pid, ev.code, ev.code,
+                                snprintf(line, sizeof line, "%s BTN 0x%x (%d)  %s",
+                                         evTag, ev.code, ev.code,
                                          ev.value ? "press" : "release");
-                            else
-                                snprintf(line, sizeof line, "%04x:%04x  HAT %s  val=%d",
-                                         m_evfd[i].vid, m_evfd[i].pid,
-                                         ev.code == ABS_HAT0X ? "X" : "Y", ev.value);
-                            if (m_inputTestLog.empty() || m_inputTestLog.back() != line) {
+                            else if (ev.code == ABS_HAT0X || ev.code == ABS_HAT0Y)
+                                snprintf(line, sizeof line, "%s HAT %s  val=%d",
+                                         evTag, ev.code == ABS_HAT0X ? "X" : "Y", ev.value);
+                            else if (ev.code == ABS_X || ev.code == ABS_Y) {
+                                // digital pads report the dpad here, log direction edges
+                                int dir = absAxisDir(&m_evfd[i], ev.code, ev.value);
+                                snprintf(line, sizeof line, "%s AXIS %s  dir=%+d",
+                                         evTag, ev.code == ABS_X ? "X" : "Y", dir);
+                            }
+                            else {
+                                // analog triggers (xinput pads), shown as edges not a value stream
+                                struct input_absinfo ai;
+                                if (ioctl(m_evfd[i].fd, EVIOCGABS(ev.code), &ai) == 0 && ai.maximum > ai.minimum) {
+                                    int span = ai.maximum - ai.minimum;
+                                    const char* nm = ev.code == ABS_Z ? "Z" : ev.code == ABS_RZ ? "RZ"
+                                                   : ev.code == ABS_GAS ? "GAS" : "BRAKE";
+                                    if (ev.value >= ai.minimum + span * 3 / 4)
+                                        snprintf(line, sizeof line, "%s TRIG %s (axis)  press", evTag, nm);
+                                    else if (ev.value <= ai.minimum + span / 4)
+                                        snprintf(line, sizeof line, "%s TRIG %s (axis)  release", evTag, nm);
+                                }
+                            }
+                            if (line[0] && (m_inputTestLog.empty() || m_inputTestLog.back() != line)) {
                                 m_inputTestLog.push_back(line);
                                 if (m_inputTestLog.size() > 16) m_inputTestLog.erase(m_inputTestLog.begin());
                                 m_dirty = true;
@@ -2853,7 +2888,9 @@ void Application::run() {
                             continue;
                         }
 
-                        if (m_evfd[i].vid == 0x054c && ev.type == EV_ABS){   // Sony pad: keep only the d-pad hat
+                        // Sony pad: hat only, except while a capture is armed
+                        if (m_evfd[i].vid == 0x054c && ev.type == EV_ABS &&
+                            !(state.currentMenuLevel == MENU_CONTROLS_JOY1 && joystickKeyState == 1)){
                             if (!(ev.code == ABS_HAT0X || ev.code == ABS_HAT0Y))
                                 continue;
                         }
@@ -2861,7 +2898,9 @@ void Application::run() {
                         // 0=release (keyboard arrow tracking), 1=press
                         if (((ev.value == 0 || ev.value == 1) && ev.type == EV_KEY) ||
                             (ev.type == EV_ABS && (ev.code == ABS_HAT0X || ev.code == ABS_HAT0Y)) ||
-                            ( (m_evfd[i].vid == 0x0ca3 || m_evfd[i].vid == 0x2dc8 || m_evfd[i].vid == 0x045e) && ev.type == EV_ABS && (ev.code == ABS_X || ev.code == ABS_Y)) ){
+                            ( (m_evfd[i].vid == 0x0ca3 || m_evfd[i].vid == 0x2dc8 || m_evfd[i].vid == 0x045e) && ev.type == EV_ABS && (ev.code == ABS_X || ev.code == ABS_Y)) ||
+                            (ev.type == EV_ABS && (ev.code == m_evfd[i].mapAx1X || ev.code == m_evfd[i].mapAx1Y)) ||
+                            (ev.type == EV_ABS && state.currentMenuLevel == MENU_CONTROLS_JOY1 && joystickKeyState == 1) ){
 
                             // no logging here, it fires per event and each line fflushes to the SD
                             bool isHander = process_evdev_event(&m_evfd[i], &ev);
@@ -2965,6 +3004,8 @@ void Application::run() {
             }
 
         }
+
+        captureEscapeTick();
 
         while (SDL_PollEvent(&event)) {
             switch (event.type) {
@@ -3303,6 +3344,16 @@ void Application::settingsChanged(const std::string& key, const std::string& val
         if (rec.empty()) rec = "Balanced";
         if (rep.empty()) rep = "Auto-Accept";
         writeBtConfig(rec, rep);
+    }
+    else if (key == Configuration::CRT_OVERSCAN) {
+
+        // overscan is a layout inset, the theme has to re-lay out
+        if (m_fontsReady) {
+            theme.setResolution(cfg.getInt(Configuration::SCREEN_WIDTH), cfg.getInt(Configuration::SCREEN_HEIGHT));
+            renderComponent.loadFonts();
+            renderComponent.forceFullRedraw();
+            m_dirty = true;
+        }
     }
     else if (key == Configuration::CRT_FONT) {
 
