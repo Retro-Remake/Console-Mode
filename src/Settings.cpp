@@ -12,6 +12,7 @@
 #include <boost/algorithm/string.hpp>
 
 #include "Configuration.h"
+#include "bgm.h"
 #include "Languages.h"
 #include "Settings.h"
 #include "Exception.h"
@@ -23,24 +24,43 @@ static std::string defaultSettingLabel(const std::string& id) {
     static const std::unordered_map<std::string,std::string> kDefaults = {
         // App settings
         {"volume","Volume"}, {"net","Network"}, {"bluetooth","Bluetooth"},
-        {"bgColor","Background Color"}, {"bgArt","Background Artwork"}, {"selColor","Selection Color"}, {"gameStyle","Game Style"}, {"buttonStyle","Button Labels"}, {"clockFormat","Clock Format"}, {"btReconnect","BT Reconnect"}, {"btRePair","BT Re-Pair"}, {"screenRes","Console Mode Resolution"}, {"misterIniRes","MiSTer INI Resolution"}, {"crtOverscan","CRT Overscan"}, {"crtFont","CRT Font"},
+        {"bgColor","Background Color"}, {"bgArt","Background Artwork"}, {"selColor","Selection Color"}, {"gameStyle","Game Style"}, {"buttonStyle","Button Labels"}, {"clockFormat","Clock Format"}, {"bootToGames","Boot to Load Game"}, {"btReconnect","BT Reconnect"}, {"btRePair","BT Re-Pair"}, {"screenRes","Console Mode Resolution"}, {"misterIniRes","MiSTer INI Resolution"}, {"misterIniHdr","MiSTer INI HDR"}, {"misterIniScandoubler","MiSTer INI Scandoubler"}, {"crtOverscan","CRT Overscan"}, {"crtFont","CRT Font"},
         {"loadConfig","System Config"}, {"updateTime","Set Time"}, {"clearcache","Rebuild Game Database"},
-        {"update","Update"}, {"updateCM","Update Console Mode"}, {"scrapeArtwork","Scrape Artwork"}, {"optimizeArtwork","Optimize Artwork"}, {"importGamelist","Import gamelist.xml"}, {"manageHidden","Manage Hidden Games"},
+        {"update","Update"}, {"updateCM","Update Console Mode"}, {"scrapeArtwork","Scrape Artwork"}, {"optimizeArtwork","Optimize Artwork"}, {"importGamelist","Import gamelist.xml"}, {"manageHidden","Manage Hidden Games"}, {"hideSections","Hide Categories"},
         {"devtools","Developer Tools"}, {"quit","Quit"}, {"inputTester","Input Tester"}, {"kbMapping","Console Mode Keyboard Mapping"}, {"cdTester","CD Tester"},
-        {"abSwap","Console Mode A/B Swap"},
+        {"abSwap","Console Mode A/B Swap"}, {"xySwap","Console Mode X/Y Swap"}, {"promptSwap","Swap Button Prompts"},
         // Developer tools
         {"showFPS","Show FPS"}, {"bootMainMenu","Boot To Main Menu"}, {"ss4Anim","SS4 Animation"}, {"useMirror","Console Mode Update Mirror"}, {"screenRefresh","CM Refresh Rate"}, {"showHomebrew","Show Homebrew"},
         {"showResume","Show Resume Game"}, {"historySize","History Size"}, {"titleFiltering","Title Filtering"}, {"controls","Controls"},
-        {"lockFlixTitle","Lock NX Title"}, {"bootSpeed","App Boot Speed"}, {"perfMode","Performance Mode"},
+        {"lockFlixTitle","Lock NX Title"}, {"centerList","Center List Selection"}, {"bootSpeed","App Boot Speed"}, {"perfMode","Performance Mode"},
         {"autoboot","Console Mode Autoboot"}, {"loadScript","Load Script"},
 #ifdef HAS_PS1
         {"discOptions","Disc Options"},
 #endif
+        {"bgm","Set Static BGM"}, {"bgmVolume","BGM Volume"},
+        {"bgmEnabled","Enable BGM"}, {"bgmMode","Mode"},
+        {"bgmMenu","Background Music"}, {"sfxMenu","System Sounds"}, {"confirmSound","Confirm Sound"}, {"backSound","Back Sound"}, {"navSound","Nav Sound"},
         // Rom settings
         {"romOverclock","ROM Overclock"}, {"romAutostart","ROM Autostart"}, {"coreOverride","Core Override"},
     };
     auto it = kDefaults.find(id);
     return it != kDefaults.end() ? it->second : id;   // unknown key -> raw id
+}
+
+void AppSettings::updateBgmVolume(bool increase) {
+    int v = 70;
+    try { v = std::stoi(settingsMap[Configuration::BGM_VOLUME].value); } catch (...) {}
+    v += increase ? 5 : -5;
+    v = v < 0 ? 0 : (v > 100 ? 100 : v);
+    settingsMap[Configuration::BGM_VOLUME].value = std::to_string(v) + "%";
+    currentValue = settingsMap[Configuration::BGM_VOLUME].value;
+    bgm::setVolume(v);
+}
+
+void AppSettings::updateBgmMode(bool) {
+    const bool dyn = settingsMap[Configuration::BGM_MODE].value == "Dynamic";
+    currentValue = dyn ? "Static" : "Dynamic";
+    settingsMap[Configuration::BGM_MODE].value = currentValue;
 }
 
 Settings::Settings(Configuration& cfg, Languages& languages,
@@ -58,7 +78,17 @@ AppSettings::AppSettings(Configuration& cfg, Languages& languages,
         Configuration::OPTIMIZE_ARTWORK,
         Configuration::IMPORT_GAMELIST,
         Configuration::MANAGE_HIDDEN,
+        Configuration::HIDE_SECTIONS,
         Configuration::VOLUME,
+        Configuration::BGM_MENU,
+        Configuration::SFX_MENU,
+        Configuration::BGM_ENABLED,
+        Configuration::BGM_MODE,
+        Configuration::BGM,
+        Configuration::BGM_VOLUME,
+        Configuration::SFX_CONFIRM,
+        Configuration::SFX_BACK,
+        Configuration::SFX_NAV,
         Configuration::GAME_STYLE,
         Configuration::BUTTON_STYLE,
         Configuration::CLOCK_FORMAT,
@@ -67,6 +97,8 @@ AppSettings::AppSettings(Configuration& cfg, Languages& languages,
         Configuration::SEL_COLOR,
         Configuration::SCREEN_RES,
         Configuration::MISTER_INI_RES,
+        Configuration::MISTER_INI_HDR,
+        Configuration::MISTER_INI_SD,
         Configuration::CRT_OVERSCAN,
         Configuration::CRT_FONT,
         Configuration::NET,
@@ -75,8 +107,11 @@ AppSettings::AppSettings(Configuration& cfg, Languages& languages,
         Configuration::BT_REPAIR,
         Configuration::CONTROLS,
         Configuration::AB_SWAP,
+        Configuration::XY_SWAP,
+        Configuration::PROMPT_SWAP,
         Configuration::INPUT_TESTER,
         Configuration::KB_MAPPING,
+        Configuration::BOOT_TO_GAMES,
         Configuration::LOADCONFIG,
         Configuration::UPDATE_TIME,
         Configuration::UPDATE,
@@ -300,6 +335,159 @@ static bool applyVideoModeToIni(const std::string& iniFile, int mode) {
     return writeLinesAtomic(iniFile, lines);
 }
 
+
+static const char* kHdrLabels[3] = { "Off", "HDR10", "HDR10 DCI-P3" };
+
+// an active line beats a commented one
+std::string Settings::parseMisterIniHdr() {
+    std::ifstream f(activeMisterIniPath());
+    if (!f) return "no ini";
+    std::string line, commented;
+    bool inMister = true;
+    while (std::getline(f, line)) {
+        size_t s = line.find_first_not_of(" \t\r\n");
+        if (s == std::string::npos) continue;
+        std::string t = line.substr(s);
+        if (t[0] == '[') { inMister = (lowerCopy(t).rfind("[mister]", 0) == 0); continue; }
+        if (!inMister) continue;
+        bool isComment = (t[0] == ';' || t[0] == '#');
+        std::string body = t;
+        if (isComment) { size_t b = body.find_first_not_of(";# \t"); body = (b == std::string::npos) ? "" : body.substr(b); }
+        if (lowerCopy(body).rfind("hdr", 0) != 0) continue;
+        char after = body.size() > 3 ? body[3] : '\0';   // not hdr_max_nits / hdr_avg_nits
+        if (after != '=' && after != ' ' && after != '\t') continue;
+        size_t eq = body.find('=');
+        if (eq == std::string::npos) continue;
+        std::string v = trimCopy(body.substr(eq + 1));
+        size_t c = v.find_first_of(";#\r\n");
+        if (c != std::string::npos) v = trimCopy(v.substr(0, c));
+        int n = (!v.empty() && v.find_first_not_of("0123456789") == std::string::npos) ? atoi(v.c_str()) : -1;
+        std::string cls = (n >= 0 && n <= 2) ? kHdrLabels[n] : (v.empty() ? "(empty)" : v);
+        if (!isComment) return cls;
+        if (commented.empty()) commented = cls + " (commented)";
+    }
+    return commented.empty() ? "Not set" : commented;
+}
+
+std::string Settings::parseMisterIniScandoubler() {
+    std::ifstream f(activeMisterIniPath());
+    if (!f) return "no ini";
+    std::string line, commented;
+    bool inMister = true;
+    while (std::getline(f, line)) {
+        size_t s = line.find_first_not_of(" \t\r\n");
+        if (s == std::string::npos) continue;
+        std::string t = line.substr(s);
+        if (t[0] == '[') { inMister = (lowerCopy(t).rfind("[mister]", 0) == 0); continue; }
+        if (!inMister) continue;
+        bool isComment = (t[0] == ';' || t[0] == '#');
+        std::string body = t;
+        if (isComment) { size_t b = body.find_first_not_of(";# \t"); body = (b == std::string::npos) ? "" : body.substr(b); }
+        if (lowerCopy(body).rfind("forced_scandoubler", 0) != 0) continue;
+        char after = body.size() > 18 ? body[18] : '\0';
+        if (after != '=' && after != ' ' && after != '\t') continue;
+        size_t eq = body.find('=');
+        if (eq == std::string::npos) continue;
+        std::string v = trimCopy(body.substr(eq + 1));
+        size_t c = v.find_first_of(";#\r\n");
+        if (c != std::string::npos) v = trimCopy(v.substr(0, c));
+        std::string cls = (v == "1") ? "On" : (v == "0") ? "Off" : (v.empty() ? "(empty)" : v);
+        if (!isComment) return cls;
+        if (commented.empty()) commented = cls + " (commented)";
+    }
+    return commented.empty() ? "Not set" : commented;
+}
+
+static bool applySdToIni(const std::string& iniFile, int sd) {
+    std::ifstream in(iniFile);
+    if (!in) return false;
+    std::vector<std::string> lines; std::string l;
+    while (std::getline(in, l)) lines.push_back(l);
+    in.close();
+    int activeIdx = -1, commentedIdx = -1, sectionIdx = -1;
+    bool inMister = true;
+    for (size_t i = 0; i < lines.size(); i++) {
+        std::string t = lines[i];
+        size_t s = t.find_first_not_of(" \t\r\n");
+        if (s == std::string::npos) continue;
+        t = t.substr(s);
+        if (t[0] == '[') { inMister = (lowerCopy(t).rfind("[mister]", 0) == 0); if (inMister) sectionIdx = (int)i; continue; }
+        if (!inMister) continue;
+        bool isComment = (t[0] == ';' || t[0] == '#');
+        std::string body = t;
+        if (isComment) { size_t b = body.find_first_not_of(";# \t"); body = (b == std::string::npos) ? "" : body.substr(b); }
+        if (lowerCopy(body).rfind("forced_scandoubler", 0) != 0) continue;
+        char after = body.size() > 18 ? body[18] : '\0';
+        if (after != '=' && after != ' ' && after != '\t') continue;
+        if (!isComment && activeIdx < 0) activeIdx = (int)i;
+        else if (isComment && commentedIdx < 0) commentedIdx = (int)i;
+    }
+    std::string newline = "forced_scandoubler=" + std::to_string(sd);
+    int replaceIdx = (activeIdx >= 0) ? activeIdx : commentedIdx;
+    if (replaceIdx >= 0 && !lines[replaceIdx].empty() && lines[replaceIdx].back() == '\r')
+        newline += '\r';
+    if      (replaceIdx  >= 0) lines[replaceIdx] = newline;
+    else if (sectionIdx  >= 0) lines.insert(lines.begin() + sectionIdx + 1, newline);
+    else                       lines.insert(lines.begin(), newline);
+    return writeLinesAtomic(iniFile, lines);
+}
+
+void Settings::updateMisterIniScandoubler(bool) {
+    bool on = (parseMisterIniScandoubler() == "On");
+    if (!applySdToIni(activeMisterIniPath(), on ? 0 : 1)) return;
+    m_iniSdCurrent = on ? "Off" : "On";
+    currentValue = m_iniSdCurrent;
+    settingsMap[Configuration::MISTER_INI_SD].value = currentValue;
+}
+
+void Settings::updateMisterIniHdr(bool increase) {
+    int n = 4;   // current + three hdr modes
+    do {   // skip the current value
+        m_iniHdrSel = (m_iniHdrSel + (increase ? 1 : -1) + n) % n;
+    } while (m_iniHdrSel > 0 && kHdrLabels[m_iniHdrSel - 1] == m_iniHdrCurrent);
+    currentValue = (m_iniHdrSel <= 0) ? m_iniHdrCurrent : kHdrLabels[m_iniHdrSel - 1];
+    settingsMap[Configuration::MISTER_INI_HDR].value = currentValue;
+}
+
+static bool applyHdrToIni(const std::string& iniFile, int hdr) {
+    std::ifstream in(iniFile);
+    if (!in) return false;
+    std::vector<std::string> lines; std::string l;
+    while (std::getline(in, l)) lines.push_back(l);
+    in.close();
+    int activeIdx = -1, commentedIdx = -1, sectionIdx = -1;
+    bool inMister = true;
+    for (size_t i = 0; i < lines.size(); i++) {
+        std::string t = lines[i];
+        size_t s = t.find_first_not_of(" \t\r\n");
+        if (s == std::string::npos) continue;
+        t = t.substr(s);
+        if (t[0] == '[') { inMister = (lowerCopy(t).rfind("[mister]", 0) == 0); if (inMister) sectionIdx = (int)i; continue; }
+        if (!inMister) continue;
+        bool isComment = (t[0] == ';' || t[0] == '#');
+        std::string body = t;
+        if (isComment) { size_t b = body.find_first_not_of(";# \t"); body = (b == std::string::npos) ? "" : body.substr(b); }
+        if (lowerCopy(body).rfind("hdr", 0) != 0) continue;
+        char after = body.size() > 3 ? body[3] : '\0';   // not hdr_max_nits / hdr_avg_nits
+        if (after != '=' && after != ' ' && after != '\t') continue;
+        if (!isComment && activeIdx < 0) activeIdx = (int)i;
+        else if (isComment && commentedIdx < 0) commentedIdx = (int)i;
+    }
+    std::string newline = "hdr=" + std::to_string(hdr);
+    int replaceIdx = (activeIdx >= 0) ? activeIdx : commentedIdx;
+    if (replaceIdx >= 0 && !lines[replaceIdx].empty() && lines[replaceIdx].back() == '\r')
+        newline += '\r';
+    if      (replaceIdx  >= 0) lines[replaceIdx] = newline;
+    else if (sectionIdx  >= 0) lines.insert(lines.begin() + sectionIdx + 1, newline);
+    else                       lines.insert(lines.begin(), newline);
+    return writeLinesAtomic(iniFile, lines);
+}
+
+bool Settings::applyMisterIniHdr() {
+    if (m_iniHdrSel <= 0) return false;
+    return applyHdrToIni(activeMisterIniPath(), m_iniHdrSel - 1);
+}
+
 bool Settings::writeMisterIniVideoMode(int mode) {
     // target only the active ini, each variant carries its own video_mode
     return applyVideoModeToIni(activeMisterIniPath(), mode);
@@ -431,6 +619,10 @@ void Settings::initializeSettings() {
     bgColors.push_back(BLUE);
     bgColors.push_back(YELLOW);
     bgColors.push_back(RED);
+    {   // 7th slot = the custom color
+        std::string cust = cfg.get(Configuration::CUSTOM_BG_COLOR);
+        bgColors.push_back((!cust.empty() && cust[0] == '#') ? cust : "#808080");
+    }
 
     selColors.clear();
     selColors.push_back(WHITE);
@@ -446,6 +638,7 @@ void Settings::initializeSettings() {
     gameStyles.push_back("Grid View");
     gameStyles.push_back("Big Grid View");
     gameStyles.push_back("NX View");
+    gameStyles.push_back("Big NX View");
     gameStyles.push_back("SS4");
 
     buttonStyles.clear();
@@ -491,11 +684,21 @@ void Settings::initializeSettings() {
             else if (value == "Fast") value = "Unsafe";
             else if (value == "Slow") value = "Safest";
         }
+        if (value.empty() && key == Configuration::BGM_VOLUME) value = "70%";
+        if (value.empty() && key == Configuration::BGM_MODE)   value = "Static";
+        if (key == Configuration::BGM_MENU || key == Configuration::SFX_MENU) value = ">";
+        // absent = on iff a file is set
+        if (value.empty() && key == Configuration::BGM_ENABLED)
+            value = cfg.get(Configuration::BGM_FILE).empty() ? "false" : "true";
         if (value.empty() && key == Configuration::SEL_COLOR)    value = WHITE;
         if (value.empty() && key == Configuration::SS4_ANIM)     value = "true";
         if (value.empty() && key == Configuration::USE_MIRROR)   value = "false";
         if (value.empty() && key == Configuration::BOOT_MAIN_MENU) value = "false";
         if (value.empty() && key == Configuration::AB_SWAP)      value = "false";
+        if (value.empty() && key == Configuration::XY_SWAP)      value = "false";
+        if (value.empty() && key == Configuration::PROMPT_SWAP)  value = "false";
+        if (value.empty() && key == Configuration::BOOT_TO_GAMES) value = "false";
+        if (value.empty() && key == Configuration::CENTER_LIST)   value = "false";
         if (value.empty() && key == Configuration::BG_ART)       value = "true";
         if (value.empty() && key == Configuration::PERF_MODE)    value = "Off";
         if (value.empty() && key == Configuration::CRT_OVERSCAN) value = "0%";
@@ -513,6 +716,15 @@ void Settings::initializeSettings() {
             m_iniVmCurrent = value;   // the "keep current" label
             m_iniVmSel = 0;
         }
+        if (key == Configuration::MISTER_INI_HDR) {                                     // computed, not stored
+            value = parseMisterIniHdr();
+            m_iniHdrCurrent = value;
+            m_iniHdrSel = 0;
+        }
+        if (key == Configuration::MISTER_INI_SD) {                                      // computed, not stored
+            value = parseMisterIniScandoubler();
+            m_iniSdCurrent = value;
+        }
         settingsMap[key] = {key, value, true};
         if (!value.empty())
             notifySettingsChange(key, value);
@@ -526,6 +738,11 @@ void Settings::initializeSettings() {
         int pct = 0; try { pct = std::stoi(settingsMap[Configuration::CRT_OVERSCAN].value); } catch (...) {}
         crt::setOverscan(pct);
     }
+
+    // 31kHz menu modes only
+    if (settingsMap.count(Configuration::MISTER_INI_SD))
+        settingsMap[Configuration::MISTER_INI_SD].enabled =
+            (crt::videoMode() >= crt::MODE_480P && crt::videoMode() <= crt::MODE_480P_SQ);
 
     // CRT-only, gate on the CRT env like CRT Overscan
     if (settingsMap.count(Configuration::CRT_FONT)) {
@@ -636,6 +853,8 @@ void AppSettings::updateConfigIni(bool increase) {
 
 void AppSettings::updateBgColor(bool increase)
 {
+    std::string cust = cfg.get(Configuration::CUSTOM_BG_COLOR);
+    bgColors[6] = (!cust.empty() && cust[0] == '#') ? cust : "#808080";
     updateListVector(bgColors, increase, false);
     settingsMap[Configuration::BG_COLOR].value = currentValue;
 }
@@ -840,6 +1059,7 @@ DevSettings::DevSettings(Configuration& cfg, Languages& languages,
         Configuration::HISTORY_SIZE,
         Configuration::TITLE_FILTER,
         Configuration::LOCK_FLIX_TITLE,
+        Configuration::CENTER_LIST,
         Configuration::SS4_ANIM,
         Configuration::USE_MIRROR,
         Configuration::BOOT_SPEED,

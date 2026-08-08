@@ -75,10 +75,15 @@ protected:
     // "MiSTer INI Resolution" row: reads/edits the active ini's video_mode, applied on reboot
     std::string parseMisterIniVideoMode();
     void        updateMisterIniVideoMode(bool increase);
+    void        updateMisterIniHdr(bool increase);
+    std::string parseMisterIniHdr();
+    void        updateMisterIniScandoubler(bool increase);
     bool        writeMisterIniVideoMode(int mode);
     std::string misterIniVmLabel(int sel);
 public:
     bool        applyMisterIniVideoMode();
+    bool        applyMisterIniHdr();
+    std::string parseMisterIniScandoubler();
 
     // RetroAchievements: toggle a per-core "main=<binary>" chain-load override in the active ini
     std::string activeMisterIniPath();
@@ -87,6 +92,9 @@ public:
     bool        misterIniHasRaWildcard();
 protected:
     int         m_iniVmSel = 0;         // 0 = keep current, 1..15 = video_mode 0..14
+    int         m_iniHdrSel = 0;        // 0 = keep current, 1..3 = hdr 0..2
+    std::string m_iniHdrCurrent;
+    std::string m_iniSdCurrent;
     std::string m_iniVmCurrent;
     void notifySettingsChange(const std::string &key, const std::string &value) override;
 
@@ -161,9 +169,21 @@ public:
                 updateBgColor(false);
             } else if (currentKey == Configuration::SEL_COLOR){
                 updateSelColor(false);
+            } else if (currentKey == Configuration::BGM_VOLUME){
+                updateBgmVolume(false);
+            } else if (currentKey == Configuration::BGM_ENABLED){
+                updateBoolSetting();
+            } else if (currentKey == Configuration::BGM_MODE){
+                updateBgmMode(false);
             } else if (currentKey == Configuration::BG_ART){
                 updateBoolSetting();
             } else if (currentKey == Configuration::AB_SWAP){
+                updateBoolSetting();
+            } else if (currentKey == Configuration::XY_SWAP){
+                updateBoolSetting();
+            } else if (currentKey == Configuration::PROMPT_SWAP){
+                updateBoolSetting();
+            } else if (currentKey == Configuration::BOOT_TO_GAMES){
                 updateBoolSetting();
             } else if (currentKey == Configuration::GAME_STYLE) {
                 updateGameStyle(false);
@@ -179,6 +199,10 @@ public:
                 updateResolution(false);
             } else if (currentKey == Configuration::MISTER_INI_RES) {
                 updateMisterIniVideoMode(false);
+            } else if (currentKey == Configuration::MISTER_INI_HDR) {
+                updateMisterIniHdr(false);
+            } else if (currentKey == Configuration::MISTER_INI_SD) {
+                updateMisterIniScandoubler(false);
             } else if (currentKey == Configuration::CRT_OVERSCAN) {
                 updateOverscan(false);
             } else if (currentKey == Configuration::CRT_FONT) {
@@ -197,6 +221,18 @@ public:
                 updateBgColor(true);
             } else if (currentKey == Configuration::SEL_COLOR) {
                 updateSelColor(true);
+            } else if (currentKey == Configuration::BGM_VOLUME) {
+                updateBgmVolume(true);
+            } else if (currentKey == Configuration::BGM_ENABLED) {
+                updateBoolSetting();
+            } else if (currentKey == Configuration::BGM_MODE) {
+                updateBgmMode(true);
+            } else if (currentKey == Configuration::XY_SWAP) {
+                updateBoolSetting();
+            } else if (currentKey == Configuration::PROMPT_SWAP) {
+                updateBoolSetting();
+            } else if (currentKey == Configuration::BOOT_TO_GAMES) {
+                updateBoolSetting();
             } else if (currentKey == Configuration::BG_ART) {
                 updateBoolSetting();
             } else if (currentKey == Configuration::GAME_STYLE) {
@@ -213,6 +249,10 @@ public:
                 updateResolution(true);
             } else if (currentKey == Configuration::MISTER_INI_RES) {
                 updateMisterIniVideoMode(true);
+            } else if (currentKey == Configuration::MISTER_INI_HDR) {
+                updateMisterIniHdr(true);
+            } else if (currentKey == Configuration::MISTER_INI_SD) {
+                updateMisterIniScandoubler(true);
             } else if (currentKey == Configuration::CRT_OVERSCAN) {
                 updateOverscan(true);
             } else if (currentKey == Configuration::CRT_FONT) {
@@ -254,6 +294,8 @@ public:
     void updateBgColor(bool increase);
     void updateSelColor(bool increase);
     void updateGameStyle(bool increase);
+    void updateBgmVolume(bool increase);
+    void updateBgmMode(bool increase);
     void updateButtonStyle(bool increase);
     void updateClockFormat(bool increase);
     void updateBtReconnect(bool increase);
@@ -309,6 +351,8 @@ public:
                 updateBootSpeed(false);
             }else if (currentKey == Configuration::PERF_MODE) {
                 updatePerfMode(false);
+            }else if (currentKey == Configuration::CENTER_LIST) {
+                updateBoolSetting();
             }else if (currentKey == Configuration::LOCK_FLIX_TITLE) {
                 updateBoolSetting();
             }else if (currentKey == Configuration::SS4_ANIM) {
@@ -350,6 +394,8 @@ public:
                 updateBootSpeed(true);
             }else if (currentKey == Configuration::PERF_MODE) {
                 updatePerfMode(true);
+            }else if (currentKey == Configuration::CENTER_LIST) {
+                updateBoolSetting();
             }else if (currentKey == Configuration::LOCK_FLIX_TITLE) {
                 updateBoolSetting();
             }else if (currentKey == Configuration::SS4_ANIM) {

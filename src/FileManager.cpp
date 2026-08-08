@@ -182,61 +182,68 @@ std::vector<std::string> FileManager::getFiles(const std::string& folder, const 
     return files;
 }
 
+static void collectRbfPaths(const std::filesystem::path& dir, std::vector<std::string>& vecAllRbfFiles)
+{
+    std::error_code lec;
+    auto options = std::filesystem::directory_options::skip_permission_denied;
+    for (std::filesystem::directory_iterator it(dir, options, lec), end; !lec && it != end; it.increment(lec)) {
+        std::string filename = it->path().filename().string();
+        if (filename.empty() || isHiddenName(filename)) continue;
+        std::error_code fec;
+        if (it->is_symlink(fec)) continue;   // symlink cycles recurse forever
+        if (it->is_directory(fec)) collectRbfPaths(it->path(), vecAllRbfFiles);
+        else if (it->is_regular_file(fec) && lowerCopy(it->path().extension().string()) == ".rbf")
+            vecAllRbfFiles.push_back(it->path().string());
+    }
+}
+
+static void scanRbfLevel(const std::filesystem::path& dir,
+                         std::vector<std::string>& vecAllRbfFiles, std::vector<Rom>& out,
+                         bool isRoot = false)
+{
+    std::vector<Rom> folders, cores;
+    std::error_code lec;
+    auto options = std::filesystem::directory_options::skip_permission_denied;
+    for (std::filesystem::directory_iterator it(dir, options, lec), end; !lec && it != end; it.increment(lec)) {
+        std::string filename = it->path().filename().string();
+        if (filename.empty() || isHiddenName(filename)) continue;
+        std::error_code fec;
+        if (it->is_symlink(fec)) continue;
+        if (it->is_directory(fec)) {
+            if (filename[0] != '_') { collectRbfPaths(it->path(), vecAllRbfFiles); continue; }
+            Rom folder(filename.substr(1), it->path(), "", true);
+            scanRbfLevel(it->path(), vecAllRbfFiles, folder.getRoms());
+            if (!folder.getRoms().empty()) folders.push_back(folder);
+        } else if (it->is_regular_file(fec)) {
+            if (lowerCopy(it->path().extension().string()) != ".rbf") continue;
+            vecAllRbfFiles.push_back(it->path().string());
+            if (!isRoot) cores.push_back(Rom(it->path().stem().string(), it->path()));   // stock menu.rbf is not a game core
+        }
+    }
+    auto less = [](const Rom& a, const Rom& b){ return a.getTitle() < b.getTitle(); };
+    std::sort(folders.begin(), folders.end(), less);
+    std::sort(cores.begin(), cores.end(), less);
+    out.insert(out.end(), folders.begin(), folders.end());
+    out.insert(out.end(), cores.begin(), cores.end());
+}
+
 void FileManager::getAllRbfFilePaths(std::vector<std::string>& vecAllRbfFiles, std::vector<Rom>& vecRbfFiles)
 {
     vecAllRbfFiles.clear();
     vecRbfFiles.clear();
 
-#ifdef X86
+#if defined(X86) && !defined(MACOS)
     std::filesystem::path root = "/home/ubuntu/menuconfig/media/fat";
 #else
-    std::filesystem::path root = "/media/fat";
+    std::filesystem::path root = remapMediaFat("/media/fat");
 #endif
-    std::filesystem::path consolePath = root / "_Console";
-    std::filesystem::path computerPath = root / "_Computer";
 
     std::error_code ec;
     if (!std::filesystem::exists(root, ec) || !std::filesystem::is_directory(root, ec)) {
         return;
     }
-
-    auto options = std::filesystem::directory_options::skip_permission_denied;
-    std::filesystem::recursive_directory_iterator it(root, options, ec);
-    std::filesystem::recursive_directory_iterator end;
-
-    while (it != end) {
-        const auto& entry = *it;
-
-        if (entry.is_regular_file(ec)) {
-            std::string filename = entry.path().filename().string();
-            if (isHiddenName(filename)) {
-                it.increment(ec);
-                if (ec) ec.clear();
-                continue;
-            }
-
-            std::string ext = lowerCopy(entry.path().extension().string());
-
-            if (ext == ".rbf") {
-                vecAllRbfFiles.push_back(entry.path().string());
-
-                if (pathIsInTree(entry.path(), consolePath) || pathIsInTree(entry.path(), computerPath)) {
-                    std::string name = entry.path().stem().string();
-                    Rom rom(name, entry.path());
-                    vecRbfFiles.push_back(rom);
-                }
-            }
-        }
-
-        it.increment(ec);
-        if (ec) ec.clear();
-    }
-
+    scanRbfLevel(root, vecAllRbfFiles, vecRbfFiles, true);
     std::sort(vecAllRbfFiles.begin(), vecAllRbfFiles.end());
-    std::sort(vecRbfFiles.begin(), vecRbfFiles.end(),
-        [](const Rom& a, const Rom& b) {
-            return a.getTitle() < b.getTitle();
-        });
 }
 
 uint8_t FileManager::LoadVolume()

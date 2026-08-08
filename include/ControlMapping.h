@@ -34,5 +34,7 @@ public:
 
     // fromPad: the event came from a gamepad, only those obey A/B swap
     ControlMap convertCommand(const SDL_Event& event, bool fromPad = false);
+    // role: 0 A, 1 B, 2 X, 3 Y
+    ControlMap padFaceCommand(int role) const;
 };
 

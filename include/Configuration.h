@@ -63,12 +63,18 @@ public:
     static const std::string SCREEN_HEIGHT;
     static const std::string SCREEN_DEPTH;
     static const std::string SCREEN_RES;   // "Default"/"" sentinel or "WxH"
-    static const std::string MISTER_INI_RES; // video_mode row, editable, Enter applies
+    static const std::string MISTER_INI_RES;
+    static const std::string MISTER_INI_HDR;
+    static const std::string MISTER_INI_SD;
+    static const std::string CUSTOM_BG_COLOR;
     static const std::string CRT_OVERSCAN;   // CRT-only: % trimmed per edge, 0 = off
     static const std::string CRT_FONT;
     static const std::string GAME_STYLE;
     static const std::string BUTTON_STYLE;
     static const std::string CLOCK_FORMAT;
+    static const std::string BOOT_TO_GAMES;
+    static const std::string HIDE_SECTIONS;
+    static const std::string HIDDEN_SECTIONS;  // comma list
 
     static const std::string VOLUME;
     static const std::string SCREEN_REFRESH;
@@ -87,7 +93,22 @@ public:
     static const std::string INPUT_TESTER;
     static const std::string KB_MAPPING;
     static const std::string AB_SWAP;        // nav only, leaves the core mapping alone
+    static const std::string XY_SWAP;        // nav only
+    static const std::string PROMPT_SWAP;    // display only
     static const std::string CD_TESTER;
+    static const std::string BGM;
+    static const std::string BGM_FILE;
+    static const std::string BGM_VOLUME;
+    static const std::string BGM_ENABLED;
+    static const std::string BGM_MODE;         // "Static" / "Dynamic"
+    static const std::string BGM_MENU;
+    static const std::string SFX_MENU;
+    static const std::string SFX_CONFIRM;
+    static const std::string SFX_BACK;
+    static const std::string SFX_CONFIRM_FILE;
+    static const std::string SFX_BACK_FILE;
+    static const std::string SFX_NAV;
+    static const std::string SFX_NAV_FILE;
     static const std::string LOADSCRIPT;
     static const std::string BLUETOOTH;
     static const std::string BT_RECONNECT;   // host-initiated reconnect policy (bt_boot.sh)
@@ -112,6 +133,7 @@ public:
     static const std::string BOOT_MAIN_MENU;
     static const std::string TITLE_FILTER;
     static const std::string LOCK_FLIX_TITLE;
+    static const std::string CENTER_LIST;
     static const std::string SHOW_RESUME;
     static const std::string BOOT_SPEED;     // "Unsafe" / "Safe" / "Safest"
     static const std::string PERF_MODE;      // "Off" / "Text Only"

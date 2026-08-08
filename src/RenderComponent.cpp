@@ -78,7 +78,8 @@ void RenderComponent::drawRomList(const std::string& folderName, const std::vect
     {
         int itemsPerPage = theme.getIntValue(Configuration::ITEMS) == 0 ? 10 : theme.getIntValue(Configuration::ITEMS);
         bool samePage = m_prevRomSel >= 0 &&
-                        (m_prevRomSel / itemsPerPage) == (currentRomIndex / itemsPerPage);
+                        listStartIndex(m_prevRomSel, itemsPerPage, (int)romData.size())
+                            == listStartIndex(currentRomIndex, itemsPerPage, (int)romData.size());
         if (!m_forceFull && !romData.empty()
             && folderName == m_prevRomFolder
             && romData.size() == m_prevRomCount
@@ -86,7 +87,7 @@ void RenderComponent::drawRomList(const std::string& folderName, const std::vect
             int startX = theme.getIntValue(Configuration::GAME_LIST_X);
             int baseY  = theme.getIntValue(Configuration::GAME_LIST_Y);
             int stepY  = theme.getIntValue(Configuration::ITEMS_SEPARATION);
-            int startIndex = (currentRomIndex / itemsPerPage) * itemsPerPage;
+            int startIndex = listStartIndex(currentRomIndex, itemsPerPage, (int)romData.size());
             int clipWidth = theme.getIntValue("GENERAL.game_list_w");
 
             if (currentRomIndex != m_prevRomSel) {
@@ -146,8 +147,7 @@ void RenderComponent::drawRomList(const std::string& folderName, const std::vect
 
     int itemsPerPage = theme.getIntValue(Configuration::ITEMS) == 0 ? 10 : theme.getIntValue(Configuration::ITEMS);
 
-    int currentPage = currentRomIndex / itemsPerPage;
-    int startIndex = currentPage * itemsPerPage;
+    int startIndex = listStartIndex(currentRomIndex, itemsPerPage, (int)romData.size());
     int endIndex = std::min<int>(startIndex + itemsPerPage, romData.size());
 
     SDL_Color selColor  = theme.getColor(Configuration::SEL_ITEM_FONT_COLOR);
@@ -276,12 +276,23 @@ std::string RenderComponent::getAlias(const std::string& title) {
     size_t slash = base.find_last_of("/\\");
     if (slash != std::string::npos) base.erase(0, slash + 1);
 
-    // a custom alias wins verbatim, ignoring Title Filtering
     std::string noExt = base;
     size_t dot = romExtDotPos(noExt);   // strip a real extension only not "G. Darius"'s period
     if (dot != std::string::npos) noExt.erase(dot);
     auto it = aliasMap.find(noExt);
-    if (it != aliasMap.end()) return it->second;
+    // romset names carry (...) junk
+    if (it != aliasMap.end()) return applyTitleFilter(it->second);
+    auto cn = coreNameMap.find(noExt);
+    if (cn != coreNameMap.end()) return cn->second;
+    // keep the datecode visible
+    size_t us = noExt.find_last_of('_');
+    if (us != std::string::npos && noExt.size() - us == 9 &&
+        noExt.find_first_not_of("0123456789", us + 1) == std::string::npos) {
+        auto cd = coreNameMap.find(noExt.substr(0, us));
+        if (cd != coreNameMap.end())
+            return cd->second + "  " + noExt.substr(us + 1, 4) + "-"
+                 + noExt.substr(us + 5, 2) + "-" + noExt.substr(us + 7, 2);
+    }
 
     return applyTitleFilter(base);
 }
@@ -305,3 +316,75 @@ void RenderComponent::update() {
 }
 
 std::unordered_map<std::string, std::string> RenderComponent::aliasMap;
+std::unordered_map<std::string, std::string> RenderComponent::coreNameMap;
+
+// MiSTer names.txt, "CoreName: Display Name" per line
+void RenderComponent::loadCoreNames(const std::string& path) {
+    std::ifstream f(path);
+    std::string line;
+    while (std::getline(f, line)) {
+        size_t c = line.find(':');
+        if (c == std::string::npos || c == 0) continue;
+        std::string key = trimCopy(line.substr(0, c));
+        std::string val = trimCopy(line.substr(c + 1));
+        if (!key.empty() && !val.empty()) coreNameMap.emplace(key, val);
+    }
+}
+
+const std::string* RenderComponent::coreNameLookup(const std::string& key) {
+    auto it = coreNameMap.find(key);
+    return (it != coreNameMap.end()) ? &it->second : nullptr;
+}
+
+// alias.txt wins
+void RenderComponent::loadRomsetAliases(const std::string& xmlPath) {
+    std::ifstream f(xmlPath);
+    if (!f) return;
+    std::stringstream ss; ss << f.rdbuf();
+    const std::string x = ss.str();
+    auto attr = [](const std::string& tag, const std::string& key) -> std::string {
+        size_t p = tag.find(" " + key + "=\"");
+        if (p == std::string::npos) return "";
+        p += key.size() + 3;
+        size_t e = tag.find('"', p);
+        return (e == std::string::npos) ? "" : tag.substr(p, e - p);
+    };
+    size_t pos = 0;
+    while ((pos = x.find('<', pos)) != std::string::npos) {
+        size_t end = x.find('>', pos);
+        if (end == std::string::npos) break;
+        std::string tag = x.substr(pos, end - pos);
+        pos = end + 1;
+        std::string name = attr(tag, "name");
+        std::string alt  = attr(tag, "altname");
+        if (name.empty() || alt.empty()) continue;
+        // the five standard entities
+        static const std::pair<const char*, const char*> ents[] =
+            {{"&amp;","&"},{"&lt;","<"},{"&gt;",">"},{"&quot;","\""},{"&apos;","'"}};
+        for (auto& e : ents) {
+            size_t q;
+            while ((q = alt.find(e.first)) != std::string::npos)
+                alt.replace(q, strlen(e.first), e.second);
+        }
+        aliasMap.emplace(name, alt);
+    }
+}
+
+// stem \t title
+void RenderComponent::loadNameAliases(const std::string& tsvPath) {
+    std::ifstream f(tsvPath);
+    std::string line;
+    while (std::getline(f, line)) {
+        size_t tab = line.find('\t');
+        if (tab == std::string::npos || tab == 0 || tab + 1 >= line.size()) continue;
+        if (!line.empty() && line.back() == '\r') line.pop_back();
+        aliasMap.emplace(line.substr(0, tab), line.substr(tab + 1));
+    }
+}
+
+const std::string* RenderComponent::aliasLookup(const std::string& key) {
+    auto it = aliasMap.find(key);
+    return (it != aliasMap.end()) ? &it->second : nullptr;
+}
+
+

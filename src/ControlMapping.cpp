@@ -21,6 +21,28 @@ ControlMapping::ControlMapping(Configuration& cfg) : m_cfg(cfg) {
     controls["KEY_START"] = cfg.getInt("CONTROLS.KEY_START");
     controls["KEY_SELECT"] = cfg.getInt("CONTROLS.KEY_SELECT");
 
+    // letter bindings block type-to-jump
+    {
+        static const struct { const char* key; int repl; } kMigrate[] = {
+            {"KEY_A", 13}, {"KEY_B", 27}, {"KEY_X", 47}, {"KEY_Y", 61},
+            {"KEY_L1", 280}, {"KEY_L2", 278}, {"KEY_R1", 281}, {"KEY_R2", 279},
+        };
+        bool migrated = false;
+        for (auto& m : kMigrate) {
+            int v = controls[m.key];
+            if ((v >= 'a' && v <= 'z') || (v >= '0' && v <= '9')) {
+                controls[m.key] = m.repl;
+                cfg.set(std::string("CONTROLS.") + m.key, std::to_string(m.repl));
+                migrated = true;
+            }
+        }
+        if (migrated) cfg.saveConfigIni();
+    }
+
+    // 0 matches an empty sym
+    if (controls["KEY_X"] <= 0) controls["KEY_X"] = 47;   // '/'
+    if (controls["KEY_Y"] <= 0) controls["KEY_Y"] = 61;   // '='
+
     controls["BTN_A"] = cfg.getInt("CONTROLS.BTN_A");
     controls["BTN_B"] = cfg.getInt("CONTROLS.BTN_B");
     controls["BTN_X"] = cfg.getInt("CONTROLS.BTN_X");
@@ -46,12 +68,27 @@ int ControlMapping::getControl(const std::string& controlName) const {
     }
 }
 
+ControlMap ControlMapping::padFaceCommand(int role) const {
+    const bool swapAB = m_cfg.getBool(Configuration::AB_SWAP);
+    const bool swapXY = m_cfg.getBool(Configuration::XY_SWAP);
+    switch (role) {
+        case 0:  return swapAB ? CMD_BACK  : CMD_ENTER;   // A
+        case 1:  return swapAB ? CMD_ENTER : CMD_BACK;    // B
+        case 2:  return swapXY ? CMD_Y     : CMD_X;       // X
+        case 3:  return swapXY ? CMD_X     : CMD_Y;       // Y
+        default: return CMD_NONE;
+    }
+}
+
 ControlMap ControlMapping::convertCommand(const SDL_Event& event, bool fromPad) {
     // pads send A/B as syms 13/27 too, so the swap keys off the source
     const bool padSrc = fromPad || event.type == SDL_JOYBUTTONDOWN;
     const bool swapAB = padSrc && m_cfg.getBool(Configuration::AB_SWAP);
     const ControlMap A_CMD = swapAB ? CMD_BACK : CMD_ENTER;
     const ControlMap B_CMD = swapAB ? CMD_ENTER : CMD_BACK;
+    const bool swapXY = padSrc && m_cfg.getBool(Configuration::XY_SWAP);
+    const ControlMap X_CMD = swapXY ? CMD_Y : CMD_X;
+    const ControlMap Y_CMD = swapXY ? CMD_X : CMD_Y;
     if (event.type == SDL_KEYDOWN) {
         if (event.key.keysym.sym == getControl("KEY_A")) return A_CMD;
         if (event.key.keysym.sym == getControl("KEY_B")) return B_CMD;
@@ -65,8 +102,11 @@ ControlMap ControlMapping::convertCommand(const SDL_Event& event, bool fromPad) 
         
         // keyboard fallbacks (macOS only, device uses evdev)
         if (event.key.keysym.sym == 27) return B_CMD;           // Escape / virtual-pad B
+        if (event.key.keysym.sym == 8) return B_CMD;            // Backspace = back
         if (event.key.keysym.sym == 13) return A_CMD;           // Return / virtual-pad A
         if (event.key.keysym.sym == 32) return CMD_X;           // Space  = X (search)
+        if (event.key.keysym.sym == 47) return CMD_X;           // /  = search
+        if (event.key.keysym.sym == 61) return CMD_Y;           // = (+) toggles favorite
         if (event.key.keysym.sym == 273) return CMD_UP;         // arrow keys (SDL 1.2 syms)
         if (event.key.keysym.sym == 274) return CMD_DOWN;
         if (event.key.keysym.sym == 275) return CMD_RIGHT;
@@ -85,8 +125,8 @@ ControlMap ControlMapping::convertCommand(const SDL_Event& event, bool fromPad) 
         if (event.jbutton.button == getControl("BTN_DOWN")) return CMD_DOWN;
         if (event.jbutton.button == getControl("BTN_LEFT")) return CMD_LEFT;
         if (event.jbutton.button == getControl("BTN_RIGHT")) return CMD_RIGHT;
-        if (event.jbutton.button == getControl("BTN_X")) return CMD_X;
-        if (event.jbutton.button == getControl("BTN_Y")) return CMD_Y;
+        if (event.jbutton.button == getControl("BTN_X")) return X_CMD;
+        if (event.jbutton.button == getControl("BTN_Y")) return Y_CMD;
         if (event.jbutton.button == getControl("BTN_SELECT")) return CMD_OPTIONS;
         if (event.jbutton.button == getControl("BTN_START")) return CMD_SYS_SETTINGS;
     } else if (event.type == SDL_JOYAXISMOTION) {

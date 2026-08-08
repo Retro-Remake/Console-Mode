@@ -50,15 +50,36 @@ public:
     enum GameStyle { GS_LIST, GS_GRID, GS_FLIX, GS_SS4 };   // list / grid / coverflow / PS4-row
 
     GameStyle gameStyle() const { return m_textOnly ? GS_LIST : m_gameStyle; }
+    // {path, isBg}
+    std::vector<std::pair<std::string,bool>> gamelistArtFiles() {
+        std::vector<std::pair<std::string,bool>> out;
+        std::lock_guard<std::mutex> lk(m_gamelistMutex);
+        for (auto& kv : m_gamelistArt) if (!kv.second.empty()) out.push_back({kv.second, false});
+        for (auto& kv : m_gamelistBg)  if (!kv.second.empty()) out.push_back({kv.second, true});
+        return out;
+    }
+
+    int listStartIndex(int cur, int per, int n) {
+        if (per < 1) per = 1;
+        if (!cfg.getBool(Configuration::CENTER_LIST)) return (cur / per) * per;
+        int maxOff = n > per ? n - per : 0;
+        int start = cur - per / 2;
+        if (start < 0) start = 0;
+        if (start > maxOff) start = maxOff;
+        return start;
+    }
 
     void setOptionsHint(bool b) { m_optionsHint = b; }
+    void setFavHint(bool b) { m_favHint = b; }
     void setGameStyle(const std::string& v) {
         m_gridBig   = (v == "Big Grid View");
+        m_flixBig   = (v == "Big NX View");
         m_gameStyle = (v == "Grid View" || m_gridBig) ? GS_GRID
-                    : (v == "NX View" || v == "Flix View") ? GS_FLIX
+                    : (v == "NX View" || v == "Flix View" || m_flixBig) ? GS_FLIX
                     : (v == "SS4") ? GS_SS4 : GS_LIST;
     }
     int gridCols() const { return m_gridBig ? 3 : 5; }
+    bool m_flixBig = false;
     int gridRows() const { return m_gridBig ? 2 : 3; }
 
     void setTextOnly(bool b) { m_textOnly = b; }
@@ -101,6 +122,7 @@ protected:
     int       m_preloadCount = 0;
     ButtonStyle m_buttonStyle = BS_LETTERS;
     bool m_optionsHint = true;
+    bool m_favHint = true;
     TitleFilter m_titleFilter = TF_EXT;
 
     SDL_Surface* imgBack;
@@ -139,7 +161,7 @@ protected:
     static const long ART_SOURCE_MAX_BYTES = 2L * 1024 * 1024;   // reject by source file size, not dimensions
 
     struct ThumbReq    { std::string key, path; int w, h; bool exact; bool bg; };
-    struct ThumbResult { std::string key; SDL_Surface* scaled; };
+    struct ThumbResult { std::string key; SDL_Surface* scaled; bool hasAlpha = false; };
     std::vector<std::thread> m_thumbThreads;
     std::mutex              m_thumbMutex;
     std::condition_variable m_thumbCv;
@@ -177,6 +199,7 @@ protected:
     std::string  m_shotSurfPath;
 
     std::unordered_map<std::string,std::string> m_gamelistArt;
+
     std::unordered_map<std::string,std::string> m_gamelistBg;
     std::mutex m_gamelistMutex;   // workers read the maps while a re-import rebuilds them
     std::string  m_gridBgPath;
@@ -252,6 +275,8 @@ protected:
 
 
     Uint32 bgFillColor() {
+        Uint32 hex;
+        if (parseHexColor(bgcolor, hex)) return hex;
         if (bgcolor == RED)    return 0xcf3a1f;
         if (bgcolor == BLUE)   return 0x3d5f93;
         if (bgcolor == GREEN)  return 0x2a988d;
@@ -261,7 +286,8 @@ protected:
     }
 
     Uint32 selColor() {
-
+        Uint32 hex;
+        if (parseHexColor(selcolor, hex)) return hex;
         if (selcolor == RED)    return 0xff3030;
         if (selcolor == BLUE)   return 0x33aaff;
         if (selcolor == GREEN)  return 0x33ff66;
@@ -286,6 +312,9 @@ protected:
     int         m_ss4StateN = -1, m_ss4StateMenu = -1;
 
     Uint32 listCardColor() {
+        Uint32 hex;
+        if (parseHexColor(bgcolor, hex))
+            return ((hex >> 16 & 0xff) * 3 / 5) << 16 | ((hex >> 8 & 0xff) * 3 / 5) << 8 | (hex & 0xff) * 3 / 5;
         if (bgcolor == RED)    return 0x7a2010;
         if (bgcolor == BLUE)   return 0x24395a;
         if (bgcolor == GREEN)  return 0x195c55;
@@ -333,6 +362,7 @@ protected:
     int mainmenustartY;
 
     static std::unordered_map<std::string, std::string> aliasMap;
+    static std::unordered_map<std::string, std::string> coreNameMap;   // names.txt
 
     int space = 0;
     int gDotCount = 0;
@@ -371,7 +401,10 @@ protected:
         m_fullFrame = true;
         m_damage.clear();
 
-        if (bgcolor == RED)
+        Uint32 hex;
+        if (parseHexColor(bgcolor, hex))
+            SDL_FillRect(screen, nullptr, hex);
+        else if (bgcolor == RED)
             SDL_FillRect(screen, nullptr, 0xcf3a1f);
         else if (bgcolor == BLUE)
             SDL_FillRect(screen, nullptr, 0x3d5f93);
@@ -720,6 +753,25 @@ public:
     void printFPS(int fps);
     void loadAliases();
     std::string getAlias(const std::string& title);
+    static void loadRomsetAliases(const std::string& xmlPath);
+    static void loadNameAliases(const std::string& tsvPath);
+    static bool parseHexColor(const std::string& v, Uint32& out) {
+        if (v.size() != 7 || v[0] != '#') return false;
+        Uint32 acc = 0;
+        for (int i = 1; i < 7; i++) {
+            char c = v[i];
+            int d = (c >= '0' && c <= '9') ? c - '0'
+                  : (c >= 'a' && c <= 'f') ? c - 'a' + 10
+                  : (c >= 'A' && c <= 'F') ? c - 'A' + 10 : -1;
+            if (d < 0) return false;
+            acc = (acc << 4) | d;
+        }
+        out = acc;
+        return true;
+    }
+    static const std::string* aliasLookup(const std::string& key);
+    static void loadCoreNames(const std::string& path);
+    static const std::string* coreNameLookup(const std::string& key);
 
     void update();
 

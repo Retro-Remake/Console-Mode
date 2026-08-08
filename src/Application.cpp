@@ -145,8 +145,10 @@ void Application::drawCurrentState() {
             if (state.currentSearchIndex < 0 || state.currentSearchIndex >= (int)m_searchResultCells.size())
                 state.currentSearchIndex = 0;
             std::string title = "Search \"" + m_searchResultsQuery + "\"";
+            renderComponent.setFavHint(!m_searchFromRbf);
 
-            RenderComponent::GameStyle gs = renderComponent.gameStyle();
+            RenderComponent::GameStyle gs = m_searchFromRbf ? RenderComponent::GS_LIST
+                                                            : renderComponent.gameStyle();
             if (gs == RenderComponent::GS_GRID)
                 renderComponent.drawGrid(title, m_searchResultCells, state.currentSearchIndex, MENU_SEARCH_RESULTS);
             else if (gs == RenderComponent::GS_SS4)
@@ -183,8 +185,11 @@ void Application::drawCurrentState() {
 
                 if (renderComponent.searchActive())
                     renderComponent.drawSearchOverlay();
-                else
-                    renderComponent.drawHistoryOrFavoritesList("Load Core",vecRbfFile,state.currentRbfIndex,MENU_RBF);
+                else {
+                    std::string lcTitle = "Load Core";
+                    for (const auto& c : m_rbfCrumb) lcTitle += " / " + c;
+                    renderComponent.drawHistoryOrFavoritesList(lcTitle,vecRbfFile,state.currentRbfIndex,MENU_RBF);
+                }
             }
             else if (state.currentMenuLevel==MENU_HOMEBREW_GAME){
 
@@ -241,6 +246,14 @@ void Application::drawCurrentState() {
                 cells.push_back({disp, iconPath});
             }
 
+            {
+                bool drawsBg = (gs == RenderComponent::GS_FLIX || gs == RenderComponent::GS_SS4 || gs == RenderComponent::GS_GRID);
+                std::string sg = cfg.get(Configuration::HOME_PATH) + "ConsoleMode/themeconfig/section_groups/";
+                if (sections.empty() || !drawsBg) renderComponent.requestSystemBgDir("");
+                else renderComponent.requestSystemBgBase(
+                    sg + lowerCopy(sections[state.currentSectionIndex].getGroupname()) + "-BG", sg + "Main-BG");
+            }
+
             std::string title = "Load Game";
             renderComponent.setOptionsHint(false);
             if (gs == RenderComponent::GS_FLIX)
@@ -283,12 +296,18 @@ void Application::drawCurrentState() {
             renderComponent.drawScreenshot(f, g_shotFileIndex, (int)g_shotFiles.size(), caption);
             break;
         }
+        case MENU_SCRAPE_DONE:
+        {
+            std::vector<std::string> rows = { "Optimize artwork now", "Finish" };
+            renderComponent.drawCheckList("Scrape Complete:  " + g_scrapeDoneLine, rows, {}, g_scrapeDoneCursor);
+            break;
+        }
         case MENU_SCRAPE_SELECT:
         {
             std::vector<std::pair<std::string,bool>> items;
             int checked = 0;
             for (auto& r : g_scrapeSystems) {
-                items.push_back({systemDisplayName(r.id), r.checked});
+                items.push_back({r.id == kScrapeFavoritesId ? "Favorites" : systemDisplayName(r.id), r.checked});
                 if (r.checked) checked++;
             }
             std::string title   = (g_scrapeMode == SCRAPE_LIBRETRO) ? "Scrape Artwork" : "Import gamelist.xml";
@@ -296,7 +315,9 @@ void Application::drawCurrentState() {
             std::vector<std::string> actionRows;
             if (g_scrapeMode == SCRAPE_LIBRETRO) {
                 actionRows.push_back(std::string("Source:  ") +
-                    (g_scrapeSource == SCRAPE_SRC_TGDB ? "TheGamesDB" : "Default (libretro)"));
+                    (g_scrapeSource == SCRAPE_SRC_TGDB ? "TheGamesDB"
+                     : g_scrapeSource == SCRAPE_SRC_SS  ? "ScreenScraper"
+                                                        : "Default (libretro)"));
                 actionRows.push_back(std::string("Force re-scrape:  ") +
                     (g_scrapeForce ? "On (overwrite existing)" : "Off (skip games with art)"));
             }
@@ -309,11 +330,29 @@ void Application::drawCurrentState() {
             renderComponent.drawCheckList(title, actionRows, items, g_scrapeCursor);
             break;
         }
+        case MENU_HIDE_SECTIONS:
+        {
+            std::vector<std::pair<std::string,bool>> items;
+            for (auto& r : g_hideRows) items.push_back({ r.first, r.second });
+            std::vector<std::string> actionRows;   // checked = hidden from Load Game
+            renderComponent.drawCheckList("Hide Categories", actionRows, items, g_hideCursor, MENU_HIDE_SECTIONS);
+            break;
+        }
         case MENU_SCRAPE_PROGRESS:
         {
             ScrapeStatus st = g_scraper.status();
             if (st.finished) {
                 if (st.wroteAny) renderComponent.invalidateArtCache();
+                if (g_scrapeFinishMenu == APP_SETTINGS && st.note.empty()) {
+                    g_scrapeDoneLine = std::to_string(st.found) + " found, "
+                                     + std::to_string(st.skipped) + " skipped, "
+                                     + std::to_string(st.missing) + " missing";
+                    g_scrapeDoneCursor = 0;
+                    state.currentMenuLevel = MENU_SCRAPE_DONE;
+                    renderComponent.forceFullRedraw();
+                    if (st.missing > 0) SetTip("Misses listed in ConsoleMode/ScrapeLogs");
+                    break;
+                }
                 state.currentMenuLevel = g_scrapeFinishMenu;
                 renderComponent.forceFullRedraw();
                 if (!st.note.empty())
@@ -321,10 +360,7 @@ void Application::drawCurrentState() {
                 else
                     SetTip("Artwork: " + std::to_string(st.found) + " found, "
                            + std::to_string(st.skipped) + " skipped, "
-                           + std::to_string(st.missing) + " missing"
-
-                           + (st.missing > 0 && g_scrapeFinishMenu == APP_SETTINGS
-                                  ? " - listed in ConsoleMode/ScrapeLogs" : ""));
+                           + std::to_string(st.missing) + " missing");
             } else {
                 renderComponent.drawScrapeProgress(g_scrapeTitle, st.currentGame,
                                                    st.system, st.phase, st.opTimeoutSec, st.opStartMs,
@@ -340,8 +376,9 @@ void Application::drawCurrentState() {
                 renderComponent.invalidateArtCache();
                 state.currentMenuLevel = APP_SETTINGS;
                 renderComponent.forceFullRedraw();
-                SetTip("Optimized " + std::to_string(g_optOk) + " of "
-                       + std::to_string(g_optTotal) + " artwork files");
+                SetTip("Optimized " + std::to_string(g_optOk - g_optSkipped) + " of "
+                       + std::to_string(g_optTotal) + " artwork files ("
+                       + std::to_string(g_optSkipped) + " already fine)");
             } else {
                 renderComponent.drawScrapeProgress("Optimizing Artwork", g_optCurrent,
                                                    "", "", 0, 0,
@@ -383,6 +420,13 @@ void Application::drawCurrentState() {
 
             RenderComponent::GameStyle gs = renderComponent.gameStyle();
             bool isList = (gs != RenderComponent::GS_GRID && gs != RenderComponent::GS_FLIX && gs != RenderComponent::GS_SS4);
+
+            {
+                auto& fr = folders[state.currentFolderIndex].getRoms();
+                if (isList || fr.empty()) renderComponent.requestSystemBgDir("");
+                else renderComponent.requestSystemBg(fr[0].getPath());
+            }
+
             std::vector<std::pair<std::string,std::string>> cells;
             for (Folder& folder : folders)
                 cells.push_back({systemDisplayName(folder.getTitle()), systemLogoPath(folder, isList)});
@@ -409,7 +453,7 @@ void Application::drawCurrentState() {
         }
         case MENU_GAME_OPTIONS:
         {
-            renderComponent.drawSelectCore(g_gameOptItems, g_gameOptIndex, -1, "Game Options");
+            renderComponent.drawSelectCore(g_gameOptItems, g_gameOptIndex, -1, g_gameOptTitle);
             break;
         }
         case MENU_HIDDEN_GAMES:
@@ -513,6 +557,10 @@ void Application::drawCurrentState() {
         }
         case APP_SETTINGS:
         {
+            if (renderComponent.textInputActive()) {
+                renderComponent.drawSearchOverlay();
+                break;
+            }
             if (ip == "No network"){
                 nGetIpCount++;
                 if(nGetIpCount > 100){
@@ -528,13 +576,33 @@ void Application::drawCurrentState() {
                 for (const auto& g : settingsGroups()) rows.push_back({g.name, ">"});
                 rows.push_back({"Developer Tools", ">"});
                 rows.push_back({"About", ">"});
+                rows.push_back({"Report Bugs / Feedback", ">"});
                 rows.push_back({"Reboot", ""});
                 rows.push_back({"Quit", ""});
                 renderComponent.drawDevToolsSettings("Home / " + languages.get(Languages::APP_SETTINGS), rows, g_settingsTopIndex);
             } else {
                 appSettings.setTransientValue(Configuration::UPDATE_CM,
-                    cmupdate::updateAvailable() ? cmupdate::latestVersion() + " available" : "");
-                renderComponent.drawAppSettings(std::string("Settings / ") + settingsGroups()[g_settingsGroupIdx].name,
+                    cmupdate::updateAvailable() ? cmupdate::latestVersion() + " available"
+                    : (cmupdate::phase() == cmupdate::CHECK_FAILED ? std::string("check failed")
+                                                                   : std::string("")));
+                {
+                    std::string f = cfg.get(Configuration::BGM_FILE);
+                    appSettings.setTransientValue(Configuration::BGM,
+                        f.empty() ? "None" : std::filesystem::path(f).stem().string());
+                    std::string c = cfg.get(Configuration::SFX_CONFIRM_FILE);
+                    appSettings.setTransientValue(Configuration::SFX_CONFIRM,
+                        c.empty() ? "Off" : std::filesystem::path(c).stem().string());
+                    std::string b = cfg.get(Configuration::SFX_BACK_FILE);
+                    appSettings.setTransientValue(Configuration::SFX_BACK,
+                        b.empty() ? "Off" : std::filesystem::path(b).stem().string());
+                    std::string nv = cfg.get(Configuration::SFX_NAV_FILE);
+                    appSettings.setTransientValue(Configuration::SFX_NAV,
+                        nv.empty() ? "Off" : std::filesystem::path(nv).stem().string());
+                }
+                const std::string gname = g_settingsGroupIdx == kBgmGroupIdx ? "Background Music"
+                                        : g_settingsGroupIdx == kSysSoundGroupIdx ? "System Sounds"
+                                        : settingsGroups()[g_settingsGroupIdx].name;
+                renderComponent.drawAppSettings(std::string("Settings / ") + gname,
                                                 appSettings.getAppSettings(), currentSettingsIndex,
                                                 (uint8_t)((vol & 7) | (isMute ? 0x10 : 0)));
             }
@@ -552,6 +620,10 @@ void Application::drawCurrentState() {
             }
             break;
         }
+        case MENU_FEEDBACK:
+            renderComponent.drawFeedback();
+            break;
+
         case MENU_ABOUT:
             renderComponent.drawAbout(g_aboutIndex);
             break;
@@ -604,6 +676,26 @@ void Application::drawCurrentState() {
         case MENU_SCRIPT:
         {
             renderComponent.drawScriptList(vecScriptList,currentScriptIndex);
+            break;
+        }
+        case MENU_BGM:
+        {
+            std::vector<Settings::SettingRow> rows;
+            std::string cur = cfg.get(bgmTargetKey(g_bgmTarget));
+            rows.push_back({g_bgmTarget == 0 ? "None" : "Off", cur.empty() ? "Active" : ""});
+            int curIdx = 0;
+            for (int i = 0; i < (int)g_bgmFiles.size(); i++) {
+                const std::string& f = g_bgmFiles[i];
+                if (f == cur) curIdx = i + 1;
+                rows.push_back({std::filesystem::path(f).stem().string(),
+                                f != cur ? ""
+                                : (g_bgmTarget == 0 && bgm::playing()) ? "Playing" : "Selected"});
+            }
+            const char* title = g_bgmTarget == 1 ? "Sound / Confirm Sound"
+                              : g_bgmTarget == 2 ? "Sound / Back Sound"
+                              : g_bgmTarget == 3 ? "Sound / Nav Sound" : "Sound / Static BGM";
+            renderComponent.drawDevToolsSettings(title, rows, g_bgmIdx,
+                                                 curIdx | (bgm::playing() ? 0x1000 : 0));
             break;
         }
         case MENU_CD_TESTER:
@@ -771,6 +863,11 @@ void Application::drawCurrentState() {
     }
 }
 
+#if !defined(MACOS) && !defined(X86)
+static volatile sig_atomic_t g_quitSignal = 0;
+static void onQuitSignal(int) { g_quitSignal = 1; }
+#endif
+
 void Application::handleCommand(ControlMap cmd) {
     m_dirty = true;
 
@@ -786,6 +883,10 @@ void Application::handleCommand(ControlMap cmd) {
     }
 
     adoptRbfScanResult();
+
+    if (cmd == CMD_ENTER) bgm::playSfx(0);
+    else if (cmd == CMD_BACK) bgm::playSfx(1);
+    else if (cmd == CMD_UP || cmd == CMD_DOWN || cmd == CMD_LEFT || cmd == CMD_RIGHT) bgm::playSfx(2);
 
     if (renderComponent.textInputActive()) {
         switch (cmd) {
@@ -869,8 +970,18 @@ void Application::handleCommand(ControlMap cmd) {
                 if (state.currentRbfIndex < 0 || state.currentRbfIndex >= static_cast<int>(vecRbfFile.size()))
                     state.currentRbfIndex = 0;
 
+                Rom& sel = vecRbfFile[state.currentRbfIndex];
+                if (sel.IsFolder()) {
+                    std::vector<Rom> kids = sel.getRoms();
+                    m_rbfCrumb.push_back(sel.getTitle());
+                    m_rbfStack.emplace_back(std::move(vecRbfFile), state.currentRbfIndex);
+                    vecRbfFile = std::move(kids);
+                    state.currentRbfIndex = 0;
+                    renderComponent.resetValues();
+                    return;
+                }
                 logMessage(INFO,"MenuLevel::MENU_RBF","load rbf");
-                std::string path = vecRbfFile[state.currentRbfIndex].getPath();
+                std::string path = sel.getPath();
                 launchRomWithPath(path,false);
                 renderComponent.resetValues();
             } else if (cmd == CMD_UP) {
@@ -882,10 +993,21 @@ void Application::handleCommand(ControlMap cmd) {
                 if (vecRbfFile.size() > 0){
                     state.currentRbfIndex = (state.currentRbfIndex + 1) % vecRbfFile.size();
                 }
+            } else if (cmd == CMD_LEFT || cmd == CMD_RIGHT) {
+                state.currentRbfIndex = styleMoveIndex(cmd, state.currentRbfIndex,
+                    (int)vecRbfFile.size(), RenderComponent::GS_LIST,
+                    theme.getIntValue(Configuration::ITEMS), 1);
             } else if (cmd == CMD_X) {
                 if (!vecRbfFile.empty()) renderComponent.openSearch();
             } else if (cmd == CMD_BACK) {
-                state.currentMenuLevel = MenuLevel::MENU_MAIN;
+                if (!m_rbfStack.empty()) {
+                    vecRbfFile = std::move(m_rbfStack.back().first);
+                    state.currentRbfIndex = m_rbfStack.back().second;
+                    m_rbfStack.pop_back();
+                    if (!m_rbfCrumb.empty()) m_rbfCrumb.pop_back();
+                } else {
+                    state.currentMenuLevel = MenuLevel::MENU_MAIN;
+                }
                 renderComponent.resetValues();
             }
             break;
@@ -897,18 +1019,35 @@ void Application::handleCommand(ControlMap cmd) {
                     state.currentSearchIndex < (int)m_searchResults.size()) {
                     std::string path = resolveLaunchPathForRom(m_searchResults[state.currentSearchIndex]);
                     if (!path.empty()) {
-                        launchRomWithPath(path);
+                        launchRomWithPath(path, !m_searchFromRbf);
                         renderComponent.resetValues();
                     }
                 }
             } else if (cmd == CMD_UP || cmd == CMD_DOWN || cmd == CMD_LEFT || cmd == CMD_RIGHT) {
                 state.currentSearchIndex = styleMoveIndex(cmd, state.currentSearchIndex,
-                    (int)m_searchResults.size(), renderComponent.gameStyle(),
+                    (int)m_searchResults.size(),
+                    m_searchFromRbf ? RenderComponent::GS_LIST : renderComponent.gameStyle(),
                     theme.getIntValue(Configuration::ITEMS), renderComponent.gridCols());
             } else if (cmd == CMD_X) {
                 renderComponent.openSearch();
+            } else if (cmd == CMD_Y && !m_searchFromRbf) {
+                if (m_searchResults.empty() ||
+                    state.currentSearchIndex < 0 ||
+                    state.currentSearchIndex >= (int)m_searchResults.size())
+                    return;
+                Rom& rom = m_searchResults[state.currentSearchIndex];
+                ensureRomExpanded(rom);
+                if (rom.IsFolder() && !rom.IsCue())
+                    return;
+                std::string romPath = resolveLaunchPathForRom(rom);
+                if (romPath.empty())
+                    return;
+                std::string romName = renderComponent.getAlias(resolveLaunchTitleForRom(rom));
+                toggleFavorite(romName, romPath);
+                renderComponent.forceFullRedraw();
+                m_dirty = true;
             } else if (cmd == CMD_BACK) {
-                state.currentMenuLevel = MenuLevel::MENU_ROM;
+                state.currentMenuLevel = m_searchFromRbf ? MenuLevel::MENU_RBF : MenuLevel::MENU_ROM;
                 renderComponent.resetValues();
             }
             break;
@@ -1069,6 +1208,51 @@ void Application::handleCommand(ControlMap cmd) {
             }
             break;
 
+        case MenuLevel::MENU_HIDE_SECTIONS:
+        {
+            int N = (int)g_hideRows.size();
+            if (cmd == CMD_UP && N) {
+                g_hideCursor = (g_hideCursor > 0) ? g_hideCursor - 1 : N - 1;
+                renderComponent.forceFullRedraw();
+            } else if (cmd == CMD_DOWN && N) {
+                g_hideCursor = (g_hideCursor < N - 1) ? g_hideCursor + 1 : 0;
+                renderComponent.forceFullRedraw();
+            } else if (cmd == CMD_ENTER && N) {
+                g_hideRows[g_hideCursor].second = !g_hideRows[g_hideCursor].second;
+                renderComponent.forceFullRedraw();
+            } else if (cmd == CMD_BACK) {
+                std::string joined;
+                for (auto& r : g_hideRows)
+                    if (r.second) joined += (joined.empty() ? "" : ",") + r.first;
+                cfg.set(Configuration::HIDDEN_SECTIONS, joined);
+                cfg.saveConfigIni();
+                reloadMenuTree();
+                state.currentMenuLevel = MenuLevel::APP_SETTINGS;
+                renderComponent.resetValues();
+            }
+            break;
+        }
+        case MenuLevel::MENU_SCRAPE_DONE:
+            if (cmd == CMD_UP || cmd == CMD_DOWN) {
+                g_scrapeDoneCursor ^= 1;
+                renderComponent.forceFullRedraw();
+            } else if (cmd == CMD_ENTER) {
+                if (g_scrapeDoneCursor == 0) {
+                    startOptimizeArtwork();
+                    if (state.currentMenuLevel == MenuLevel::MENU_SCRAPE_DONE) {
+                        state.currentMenuLevel = MenuLevel::APP_SETTINGS;
+                        renderComponent.resetValues();
+                    }
+                } else {
+                    state.currentMenuLevel = MenuLevel::APP_SETTINGS;
+                    renderComponent.resetValues();
+                }
+            } else if (cmd == CMD_BACK) {
+                state.currentMenuLevel = MenuLevel::APP_SETTINGS;
+                renderComponent.resetValues();
+            }
+            break;
+
         case MenuLevel::MENU_SCRAPE_SELECT:
         {
 
@@ -1081,7 +1265,8 @@ void Application::handleCommand(ControlMap cmd) {
             int  sys         = (int)g_scrapeSystems.size();
             int  N           = special + sys;
             auto toggleSource = [&]() {
-                g_scrapeSource = (g_scrapeSource == SCRAPE_SRC_TGDB) ? SCRAPE_SRC_LIBRETRO : SCRAPE_SRC_TGDB;
+                g_scrapeSource = (g_scrapeSource == SCRAPE_SRC_LIBRETRO) ? SCRAPE_SRC_TGDB
+                                                                        : SCRAPE_SRC_LIBRETRO;
                 buildScrapeSystems();
                 renderComponent.forceFullRedraw();
             };
@@ -1598,6 +1783,7 @@ void Application::handleCommand(ControlMap cmd) {
                 coreSelectFolderName = folder.getTitle();
                 coreSelectRomPath = romPath;                 // launch path keys the core override
                 g_gameOptCellPath = rom->getPath();          // cell path keys the BG lookup
+                g_gameOptTitle = std::filesystem::path(romPath).filename().string();
                 g_gameOptItems = { "Set BG Image", "Scrape Art (Default)", "Scrape Art (TheGamesDB)", "Select Core Override", "Hide Game" };
                 g_gameOptReturnMenu = MENU_ROM;
                 g_gameOptIndex = 0;
@@ -1724,6 +1910,7 @@ void Application::handleCommand(ControlMap cmd) {
                         SetTip("Open folder first.");
                     } else {
                         g_gameOptCellPath  = sel.getPath();        // BG lookup path
+                        g_gameOptTitle     = std::filesystem::path(sel.getPath()).filename().string();
                         g_gameOptItems     = { "Set BG Image" };   // homebrew has no selectable cores
                         g_gameOptReturnMenu = MENU_HOMEBREW_GAME;
                         g_gameOptIndex     = 0;
@@ -1740,7 +1927,7 @@ void Application::handleCommand(ControlMap cmd) {
         case APP_SETTINGS:
             if (g_settingsGroupIdx < 0) {
                 int nGroups = (int)settingsGroups().size();
-                int total = nGroups + 4;
+                int total = nGroups + 5;
                 if (cmd == CMD_BACK) {
                     state.currentMenuLevel = MenuLevel::MENU_MAIN;
                     try {
@@ -1772,6 +1959,9 @@ void Application::handleCommand(ControlMap cmd) {
                         state.currentMenuLevel = MenuLevel::MENU_ABOUT;
                         renderComponent.forceFullRedraw();
                     } else if (g_settingsTopIndex == nGroups + 2) {
+                        state.currentMenuLevel = MenuLevel::MENU_FEEDBACK;
+                        renderComponent.forceFullRedraw();
+                    } else if (g_settingsTopIndex == nGroups + 3) {
 #if !defined(MACOS) && !defined(X86)
                         SDL_Quit();
                         rebootViaHost(-1);   // warm reboot via host, does not return
@@ -1786,7 +1976,17 @@ void Application::handleCommand(ControlMap cmd) {
                 break;
             }
             if (cmd == CMD_BACK) {
-                g_settingsGroupIdx = -1;
+                if (g_settingsGroupIdx == kBgmGroupIdx || g_settingsGroupIdx == kSysSoundGroupIdx) {
+                    const bool wasBgm = g_settingsGroupIdx == kBgmGroupIdx;
+                    const int snd = settingsGroupIndexOf("Sound & Connectivity");
+                    appSettings.setVisibleGroup(settingsGroups()[snd].keys);
+                    g_settingsGroupIdx = snd;
+                    currentSettingsIndex = wasBgm ? 1 : 2;
+                    // setVisibleGroup resets the cursor to slot 0
+                    for (int i = 0; i < currentSettingsIndex; i++) appSettings.navigateDown();
+                } else {
+                    g_settingsGroupIdx = -1;
+                }
                 renderComponent.forceFullRedraw();
             } else if (cmd == CMD_UP) {
                 int n = appSettings.settingCount();
@@ -1855,6 +2055,39 @@ void Application::handleCommand(ControlMap cmd) {
                     isMute = !isMute;
                     saveVolumeInfo();
                 }
+                else if (appSettings.getCurrentKey() == Configuration::BGM_MENU
+                      || appSettings.getCurrentKey() == Configuration::SFX_MENU){
+                    const bool isBgm = appSettings.getCurrentKey() == Configuration::BGM_MENU;
+                    appSettings.setVisibleGroup(isBgm ? bgmGroupKeys() : sysSoundGroupKeys());
+                    g_settingsGroupIdx = isBgm ? kBgmGroupIdx : kSysSoundGroupIdx;
+                    currentSettingsIndex = 0;
+                    renderComponent.forceFullRedraw();
+                    m_dirty = true;
+                }
+                else if (appSettings.getCurrentKey() == Configuration::BGM
+                      || appSettings.getCurrentKey() == Configuration::SFX_CONFIRM
+                      || appSettings.getCurrentKey() == Configuration::SFX_BACK
+                      || appSettings.getCurrentKey() == Configuration::SFX_NAV){
+                    g_bgmTarget = appSettings.getCurrentKey() == Configuration::SFX_CONFIRM ? 1
+                                : appSettings.getCurrentKey() == Configuration::SFX_BACK   ? 2
+                                : appSettings.getCurrentKey() == Configuration::SFX_NAV    ? 3 : 0;
+                    std::string dir = g_bgmTarget == 0 ? bgmDir(cfg) : sysSoundDir(cfg);
+                    std::error_code ec;
+                    std::filesystem::create_directories(dir, ec);
+                    g_bgmFiles.clear();
+                    for (auto& e : std::filesystem::directory_iterator(dir, ec)) {
+                        if (!e.is_regular_file(ec)) continue;
+                        std::string n = e.path().filename().string();
+                        if (n.size() > 4 && n[0] != '.' && lowerCopy(n.substr(n.size() - 4)) == ".mp3")
+                            g_bgmFiles.push_back(n);
+                    }
+                    std::sort(g_bgmFiles.begin(), g_bgmFiles.end());
+                    g_bgmIdx = 0;
+                    state.currentMenuLevel = MenuLevel::MENU_BGM;
+                    renderComponent.resetValues();
+                    renderComponent.forceFullRedraw();
+                    m_dirty = true;
+                }
                 else if (appSettings.getCurrentKey() == Configuration::LOADCONFIG){
                     currentIniIndex = appSettings.iniIndex;
                     state.currentMenuLevel = MenuLevel::MENU_SYSTEMCONFIG;
@@ -1868,6 +2101,15 @@ void Application::handleCommand(ControlMap cmd) {
                         rebootViaHost(-1);
 #endif
                         SetTip("Video mode written to the ini.");
+                    }
+                }
+                else if (appSettings.getCurrentKey() == Configuration::MISTER_INI_HDR){
+                    if (appSettings.applyMisterIniHdr()) {
+#if !defined(MACOS) && !defined(X86)
+                        SDL_Quit();
+                        rebootViaHost(-1);
+#endif
+                        SetTip("HDR mode written to the ini.");
                     }
                 }
                 else if  (appSettings.getCurrentKey() == Configuration::CLEAR_CACHE){
@@ -1899,12 +2141,27 @@ void Application::handleCommand(ControlMap cmd) {
                         renderComponent.forceFullRedraw();
                     } else if (cmupdate::phase() == cmupdate::UP_TO_DATE) {
                         SetTip("Up to date (v" + cmupdate::currentVersion() + ")");
+                    } else if (cmupdate::phase() == cmupdate::CHECK_FAILED) {
+                        SetTip(cmupdate::phaseText());
+                        cmupdate::startCheck(cfg.getBool(Configuration::USE_MIRROR));
                     } else {
 
                         // no check result yet, never download blind
                         cmupdate::startCheck(cfg.getBool(Configuration::USE_MIRROR));
                         SetTip("Checking for updates...");
                     }
+                }
+                else if  (appSettings.getCurrentKey() == Configuration::HIDE_SECTIONS){
+                    FileManager fm(cfg);
+                    std::set<std::string> hidden;
+                    { std::stringstream hs(cfg.get(Configuration::HIDDEN_SECTIONS));
+                      std::string h; while (std::getline(hs, h, ',')) if (!h.empty()) hidden.insert(lowerCopy(h)); }
+                    g_hideRows.clear();
+                    for (auto& f : fm.getFiles(cfg.get(Configuration::HOME_PATH) + "ConsoleMode/themeconfig/section_groups/", ".ini"))
+                        g_hideRows.push_back({ f, hidden.count(lowerCopy(f)) > 0 });
+                    g_hideCursor = 0;
+                    state.currentMenuLevel = MenuLevel::MENU_HIDE_SECTIONS;
+                    renderComponent.forceFullRedraw();
                 }
                 else if  (appSettings.getCurrentKey() == Configuration::MANAGE_HIDDEN){
                     if (vecHiddenFile.empty()) {
@@ -1984,6 +2241,7 @@ void Application::handleCommand(ControlMap cmd) {
                     } else if (!cdtest::open()) {
                         SetTip("No playable CD found.");
                     } else {
+                        bgm::stop();   // the CD player owns the ALSA output while open
                         m_cdIdx = 0;
                         state.currentMenuLevel = MenuLevel::MENU_CD_TESTER;
                         renderComponent.resetValues();
@@ -2024,6 +2282,15 @@ void Application::handleCommand(ControlMap cmd) {
         case MENU_STORAGE:
             if (cmd == CMD_BACK) {
                 state.currentMenuLevel = MenuLevel::MENU_ABOUT;
+                renderComponent.forceFullRedraw();
+                m_dirty = true;
+            }
+            break;
+
+        case MENU_FEEDBACK:
+            if (cmd == CMD_BACK) {
+                state.currentMenuLevel = MenuLevel::APP_SETTINGS;
+                g_settingsGroupIdx = -1;
                 renderComponent.forceFullRedraw();
                 m_dirty = true;
             }
@@ -2151,6 +2418,7 @@ void Application::handleCommand(ControlMap cmd) {
 
             if (cmd == CMD_BACK) {
                 cdtest::close();
+                bgmResume(cfg);
                 state.currentMenuLevel = MenuLevel::DEVTOOLS_SETTINGS;
                 renderComponent.forceFullRedraw();
                 m_dirty = true;
@@ -2201,6 +2469,36 @@ void Application::handleCommand(ControlMap cmd) {
                     SDL_Quit();
                     rebootViaHost(ini_num);   // host applies the ini and warm reboots, does not return
                 #endif
+            }
+            break;
+
+        case MENU_BGM:
+            if (cmd == CMD_BACK) {
+                state.currentMenuLevel = MenuLevel::APP_SETTINGS;
+                renderComponent.resetValues();
+                renderComponent.forceFullRedraw();
+                m_dirty = true;
+            } else if (cmd == CMD_UP || cmd == CMD_DOWN) {
+                int n = 1 + (int)g_bgmFiles.size();
+                g_bgmIdx = (g_bgmIdx + (cmd == CMD_UP ? -1 : 1) + n) % n;
+            } else if (cmd == CMD_ENTER) {
+                if (g_bgmIdx == 0) {
+                    cfg.set(bgmTargetKey(g_bgmTarget), "");
+                    cfg.saveConfigIni();
+                    if (g_bgmTarget == 0 && !bgmDynamic(cfg)) bgm::stopTrack();
+                    else bgm::setSfx(g_bgmTarget - 1, "");
+                } else if (g_bgmIdx - 1 < (int)g_bgmFiles.size()) {
+                    const std::string& f = g_bgmFiles[g_bgmIdx - 1];
+                    cfg.set(bgmTargetKey(g_bgmTarget), f);
+                    cfg.saveConfigIni();
+                    if (g_bgmTarget == 0) {
+                        if (bgmEnabled(cfg) && !bgmDynamic(cfg))
+                            bgm::start(bgmDir(cfg) + f, bgmVolume(cfg));
+                    } else {
+                        bgm::setSfx(g_bgmTarget - 1, sysSoundDir(cfg) + f);
+                        bgm::playSfx(g_bgmTarget - 1);
+                    }
+                }
             }
             break;
 
@@ -2507,7 +2805,16 @@ void Application::handleCommand(ControlMap cmd) {
                 onlyEnter = true;
             }
 
-        if (cmd == CMD_UP) {
+        if (cmd == CMD_X && (currentKey == Configuration::BG_COLOR || currentKey == Configuration::SEL_COLOR)) {
+            tipStartTime = 0; strtip.clear();
+            m_hexColorKey = currentKey;
+            renderComponent.openTextInput("Hex color, six digits e.g. 6A0DAD");
+        } else if (cmd == CMD_ENTER && currentKey == Configuration::BG_COLOR
+                   && !appSettings.currentValue.empty() && appSettings.currentValue[0] == '#') {
+            tipStartTime = 0; strtip.clear();
+            m_hexColorKey = currentKey;
+            renderComponent.openTextInput("Hex color, six digits e.g. 6A0DAD");
+        } else if (cmd == CMD_UP) {
             appSettings.navigateUp();
         } else if (cmd == CMD_DOWN) {
             appSettings.navigateDown();
@@ -2563,6 +2870,16 @@ void Application::handleCommand(ControlMap cmd) {
 }
 
 void Application::run() {
+
+#if !defined(MACOS) && !defined(X86)
+    {
+        struct sigaction sa;
+        memset(&sa, 0, sizeof(sa));
+        sa.sa_handler = onQuitSignal;
+        sigaction(SIGTERM, &sa, nullptr);
+        sigaction(SIGINT,  &sa, nullptr);
+    }
+#endif
 
     islaunchedByMiSTer = consolemodeConsumeMisterLaunchMarker();
     if(islaunchedByMiSTer)
@@ -2649,6 +2966,9 @@ void Application::run() {
     }
 #endif
 
+    soundsMigrateDirs(cfg);
+    bgmLoadSfxIfConfigured(cfg);
+
     {
         // hold the menu behind a splash until icons decode, draining input so evdev can't overflow
         std::string bootSpeed = cfg.get(Configuration::BOOT_SPEED);
@@ -2693,11 +3013,25 @@ void Application::run() {
         }
     }
 
+    g_bgmLive = true;
+    bgmStartIfConfigured(cfg);
+
     // load USB caches before the first frame so last-used games show immediately
     loadUsbRom();
 
+    if (cfg.getBool(Configuration::BOOT_TO_GAMES)) {
+        resetRomFolderNavigation();
+        state.currentMenuLevel = MenuLevel::MENU_SECTION;
+        state.currentSectionIndex = 0;
+        renderComponent.resetValues();
+    }
+
     while (isRunning) {
         frameStart = SDL_GetTicks();
+
+#if !defined(MACOS) && !defined(X86)
+        if (g_quitSignal) isRunning = false;
+#endif
 
 #ifdef __linux__
 
@@ -3007,6 +3341,7 @@ void Application::run() {
 
         captureEscapeTick();
 
+#if defined(MACOS) || defined(X86)
         while (SDL_PollEvent(&event)) {
             switch (event.type) {
                 case SDL_QUIT:
@@ -3018,7 +3353,6 @@ void Application::run() {
                 case SDL_JOYHATMOTION:
                     {
 #ifndef MACOS
-                        // device: evdev owns all input, drop SDL's duplicate to avoid double-fires
                         break;
 #endif
                         if (isHandlerInput)
@@ -3029,6 +3363,7 @@ void Application::run() {
                         repeatInterval = 100;
                         ControlMap key = controlMapping.convertCommand(event);
                         handleCommand(key);
+                        if (key == CMD_NONE) tryCharJump(event.key.keysym.sym);
                     }
                     break;
                 case SDL_JOYBUTTONUP:
@@ -3037,6 +3372,7 @@ void Application::run() {
                     break;
             }
         }
+#endif
 
         if (isHandlerInput) m_dirty = true;
 
@@ -3047,24 +3383,35 @@ void Application::run() {
             static const char* navKeys = getenv("CONSOLEMODE_KEYS");
             static size_t navIdx = 0;
             static int    navTick = 0;
+            // $CONSOLEMODE_KEYRATE: iterations between scripted keys
+            static int navRate = [] { const char* r = getenv("CONSOLEMODE_KEYRATE");
+                                      int v = r ? atoi(r) : 0; return v > 0 ? v : 10; }();
             if (navKeys && navKeys[navIdx]) {
-                if (navTick++ % 10 == 0) {
-                    ControlMap cmd = CMD_NONE;
-                    switch (navKeys[navIdx]) {
-                        case 'u': cmd = CMD_UP;      break;
-                        case 'd': cmd = CMD_DOWN;    break;
-                        case 'l': cmd = CMD_LEFT;    break;
-                        case 'r': cmd = CMD_RIGHT;   break;
-                        case 'e': cmd = CMD_ENTER;   break;
-                        case 'b': cmd = CMD_BACK;    break;
-                        case 'o': cmd = CMD_OPTIONS; break;
-                        case 'x': cmd = CMD_X;       break;
-                        case 'y': cmd = CMD_Y;       break;
-                        case 's': cmd = CMD_SYS_SETTINGS; break;
-                        default:  break;
-                    }
-                    navIdx++;
-                    if (cmd != CMD_NONE) { handleCommand(cmd); m_dirty = true; }
+                if (navTick++ % navRate == 0) {
+                    // "[abc]" fires as one burst
+                    bool burst = false;
+                    do {
+                        char k = navKeys[navIdx];
+                        if (k == '[') { burst = true;  navIdx++; continue; }
+                        if (k == ']') { burst = false; navIdx++; continue; }
+                        ControlMap cmd = CMD_NONE;
+                        switch (k) {
+                            case 'u': cmd = CMD_UP;      break;
+                            case 'd': cmd = CMD_DOWN;    break;
+                            case 'l': cmd = CMD_LEFT;    break;
+                            case 'r': cmd = CMD_RIGHT;   break;
+                            case 'e': cmd = CMD_ENTER;   break;
+                            case 'b': cmd = CMD_BACK;    break;
+                            case 'o': cmd = CMD_OPTIONS; break;
+                            case 'x': cmd = CMD_X;       break;
+                            case 'y': cmd = CMD_Y;       break;
+                            case 's': cmd = CMD_SYS_SETTINGS; break;
+                            default:  break;
+                        }
+                        navIdx++;
+                        if (cmd != CMD_NONE) { handleCommand(cmd); m_dirty = true; }
+                        else tryCharJump(k);
+                    } while (burst && navKeys[navIdx]);
                 }
             } else if (navKeys) {
                 macConsumedNav = true;
@@ -3281,6 +3628,7 @@ void Application::launchRom() {
     appendSelectedCoreToLaunchPath(launchPath, folderName);
     logMessage(INFO,"MiSTer_RR_cmd final",launchPath.c_str());
 
+    bgm::stop();
     if (!launchMiSTerRR(launchPath)) {
         logMessage(ERROR,"launchRom","launchMiSTerRR false");
     } else {
@@ -3304,6 +3652,19 @@ void Application::settingsChanged(const std::string& key, const std::string& val
         if (menuCache.cacheExists(cacheFilePath)) {
             allCachedItems = menuCache.loadFromCache(cacheFilePath);
         }
+    }
+    else if (key == Configuration::BGM_VOLUME) {
+        renderComponent.forceFullRedraw();
+        m_dirty = true;
+    }
+    else if (key == Configuration::BGM_ENABLED || key == Configuration::BGM_MODE) {
+        // bgmApply reads the config
+        bool cfgChanged = (cfg.get(key) != value);
+        cfg.set(key, value);
+        if (cfgChanged) cfg.saveConfigIni();
+        if (g_bgmLive) bgmApply(cfg);
+        renderComponent.forceFullRedraw();
+        m_dirty = true;
     }
     else if (key == Configuration::BG_COLOR) {
         // bg color affects the whole screen so force a full redraw
@@ -3385,7 +3746,8 @@ void Application::settingsChanged(const std::string& key, const std::string& val
     }
 
     // rewrite only on a real change (observers fire ~40x at boot), and never persist the computed MISTER_INI_RES row
-    if (key != Configuration::MISTER_INI_RES) {
+    if (key != Configuration::MISTER_INI_RES && key != Configuration::MISTER_INI_HDR
+        && key != Configuration::MISTER_INI_SD) {
         bool cfgChanged = (cfg.get(key) != value);
         cfg.set(key, value);
         if (cfgChanged) cfg.saveConfigIni();
