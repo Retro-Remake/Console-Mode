@@ -518,10 +518,11 @@ public:
         if      (res == "2560x1440") customVmode = "vmode 14";
         else if (res == "2048x1536") customVmode = "vmode 13";
 
-        {
-            const char* crtEnv = getenv("CONSOLEMODE_CRT");
-            if (crtEnv && std::string(crtEnv) == "1") explicitRes = false;
-        }
+        // CRT mode drives the tube at its own scanout geometry, so the configured
+        // Console Mode resolution does not apply to this session.
+        const char* crtEnv = getenv("CONSOLEMODE_CRT");
+        const bool crtMode = (crtEnv && std::string(crtEnv) == "1");
+        if (crtMode) explicitRes = false;
 
 #if !defined(MACOS) && !defined(X86)
         if (explicitRes) {
@@ -625,8 +626,16 @@ public:
         }
 
         resW = screen->w; resH = screen->h;
-        cfg.set(Configuration::SCREEN_WIDTH,  std::to_string(resW));
-        cfg.set(Configuration::SCREEN_HEIGHT, std::to_string(resH));
+
+        // Only persist dimensions that describe the user's configured display.
+        // A CRT session runs at the tube's scanout geometry (e.g. 320x240) and a
+        // TATE session runs portrait; writing either back would overwrite
+        // GLOBAL.screenWidth/screenHeight and leave config.ini contradicting
+        // APPLICATION.screenRes for every later read.
+        if (!crtMode && m_rotation != 1 && m_rotation != 2) {
+            cfg.set(Configuration::SCREEN_WIDTH,  std::to_string(resW));
+            cfg.set(Configuration::SCREEN_HEIGHT, std::to_string(resH));
+        }
         theme.setResolution(resW, resH);
         screenWidth  = resW;
         screenHeight = resH;
