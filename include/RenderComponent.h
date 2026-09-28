@@ -9,6 +9,7 @@
 #include <ctime>
 #include <cstring>
 #include <cstdlib>
+#include <cstdio>
 #include <unistd.h>
 #include <thread>
 #include <mutex>
@@ -505,6 +506,27 @@ public:
         m_gridTitleScrolls = false;
     }
 
+    // Rotation to apply to the UI, 0..3 (0 none, 1 90 CW, 2 90 CCW, 3 180).
+    // crt::rotation() only reports a value inside a CRT session, so on the HDMI path fall back to
+    // CONSOLEMODE_ROTATE (any platform) and then to the value the OSD "Rotation" setting persists
+    // in config/consolemode_rotation.bin. Used by initialize() and by the main-loop change check,
+    // which must agree or the change check reboots the host.
+    int configuredRotation() const {
+        int rot = crt::rotation();
+        if (rot >= 1 && rot <= 3) return rot;
+        if (const char* r = getenv("CONSOLEMODE_ROTATE")) {
+            int rv = atoi(r);
+            if (rv >= 0 && rv <= 3) return rv;
+        }
+        std::string path = cfg.get(Configuration::HOME_PATH) + "config/consolemode_rotation.bin";
+        FILE* f = fopen(path.c_str(), "rb");
+        if (!f) return 0;
+        unsigned char b = 0;
+        size_t n = fread(&b, 1, 1, f);
+        fclose(f);
+        return (n == 1 && b <= 3) ? (int)b : 0;
+    }
+
     void initialize() {
         // MUST switch vmode before SDL_Init: the fbcon driver reads fb geometry at init
         std::string res = cfg.get(Configuration::SCREEN_RES);
@@ -598,12 +620,10 @@ public:
 
         crt::init();
 
-        // TATE 1=CW 2=CCW: draw into a portrait surface, rotate-blit to landscape fb0 in update()
-        m_rotation = crt::rotation();
-#if defined(MACOS) || defined(X86)
-
-        if (const char* r = getenv("CONSOLEMODE_ROTATE")) { int rv = atoi(r); if (rv >= 0 && rv <= 3) m_rotation = rv; }
-#endif
+        // 1=CW 2=CCW: draw into a surface of swapped geometry, rotate-blit into fb0 in update().
+        // Works for both TATE (portrait UI into a landscape fb0) and a portrait-scanned HDMI panel
+        // (landscape UI into a portrait fb0); rotateBlit90 only needs the two geometries to be swapped.
+        m_rotation = configuredRotation();
         if (screen && (m_rotation == 1 || m_rotation == 2)) {
             const SDL_PixelFormat* pf = screen->format;
             SDL_Surface* portrait = SDL_CreateRGBSurface(

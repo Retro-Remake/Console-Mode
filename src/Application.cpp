@@ -871,8 +871,8 @@ static void onQuitSignal(int) { g_quitSignal = 1; }
 void Application::handleCommand(ControlMap cmd) {
     m_dirty = true;
 
-    // CRT 180deg flips the whole frame so invert the d-pad to match the tube
-    if (crt::rotation() == 3) {
+    // 180deg flips the whole frame so invert the d-pad to match the display
+    if (renderComponent.configuredRotation() == 3) {
         switch (cmd) {
             case CMD_UP:    cmd = CMD_DOWN;  break;
             case CMD_DOWN:  cmd = CMD_UP;    break;
@@ -3044,9 +3044,11 @@ void Application::run() {
 #if !defined(MACOS) && !defined(X86)
 
         {
-            // a 90deg TATE change needs a full re-init so warm reboot, debounced ~0.5s
+            // a 90deg rotation change needs a full re-init so warm reboot, debounced ~0.5s.
+            // Same source as initialize(), otherwise an HDMI-path rotation would never match
+            // crt::rotation() and this would reboot the host every ~0.5s.
             static int s_lastRot = -1, s_rotStable = 0;
-            int curRot = crt::rotation();
+            int curRot = renderComponent.configuredRotation();
             if (curRot == s_lastRot) { if (s_rotStable < 1000) s_rotStable++; }
             else { s_lastRot = curRot; s_rotStable = 0; }
             bool portraitInvolved = (curRot == 1 || curRot == 2) ||
