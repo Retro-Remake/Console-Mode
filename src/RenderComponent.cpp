@@ -41,7 +41,7 @@ static void rotateBlit90(SDL_Surface* src, SDL_Surface* dst, int dir) {
     if (!src || !dst) return;
     const int PW = src->w, PH = src->h;
     const int FW = dst->w, FH = dst->h;           // FW == PH, FH == PW
-    if (FW != PH || FH != PW) return;             // geometry mismatch
+    if (FW != PH || FH != PW) return;
     if (SDL_MUSTLOCK(src) && SDL_LockSurface(src) < 0) return;
     if (SDL_MUSTLOCK(dst) && SDL_LockSurface(dst) < 0) { if (SDL_MUSTLOCK(src)) SDL_UnlockSurface(src); return; }
     const uint8_t* sp = (const uint8_t*)src->pixels;
@@ -72,9 +72,11 @@ void RenderComponent::drawRomList(const std::string& folderName, const std::vect
                                   MenuLevel menu, bool useAlias, bool exactArt) {
     // folder names pass through as-is (getAlias would strip after a '/', e.g. "TI-99/4A")
     auto disp = [&](const std::string& s) -> std::string { return useAlias ? getAlias(s) : s; };
-    m_listArtIsLogo = (menu == MENU_FOLDER);   // folder logos get a backing card
 
-    // same-page selection/scroll change: repaint only the affected rows
+    m_listArtIsLogo = false;
+    if (menu == MENU_FOLDER && currentRomIndex >= 0 && currentRomIndex < (int)romData.size())
+        m_listArtIsLogo = romData[currentRomIndex].second.rfind("syslogo:", 0) == 0;
+
     {
         int itemsPerPage = theme.getIntValue(Configuration::ITEMS) == 0 ? 10 : theme.getIntValue(Configuration::ITEMS);
         bool samePage = m_prevRomSel >= 0 &&
@@ -91,7 +93,7 @@ void RenderComponent::drawRomList(const std::string& folderName, const std::vect
             int clipWidth = theme.getIntValue("GENERAL.game_list_w");
 
             if (currentRomIndex != m_prevRomSel) {
-                // selection moved within page: redraw old and new rows
+
                 int oldY = baseY + (m_prevRomSel  - startIndex) * stepY;
                 int newY = baseY + (currentRomIndex - startIndex) * stepY;
                 std::string oldAlias = disp(romData[m_prevRomSel].first);
@@ -104,22 +106,22 @@ void RenderComponent::drawRomList(const std::string& folderName, const std::vect
                                    startX, newY, clipWidth);
                 if (!m_textOnly) {    // Performance Mode: no art
                     requestThumbnail(romData[currentRomIndex].second, exactArt);
-                    // redraw box so a smaller icon doesn't leave the previous showing through
-                    drawListArt(thumbnail, menu == MENU_FOLDER);
+
+                    drawListArt(thumbnail, m_listArtIsLogo);
                 }
                 m_prevRomSel    = currentRomIndex;
                 m_settlePending = true;                  // refresh art/footer once scrolling stops
                 m_needsRedraw   = true;
                 return;
             } else if (!m_settlePending) {
-                // stationary: marquee the selected row
+
                 int rowY = baseY + (currentRomIndex - startIndex) * stepY;
                 drawRomRowSelected(cachedText(font, disp(romData[currentRomIndex].first),
                                    theme.getColor(Configuration::SEL_ITEM_FONT_COLOR)),
                                    startX, rowY, clipWidth);
                 return;
             }
-            // settle pending: fall through to full redraw so art and footer catch up
+
             m_settlePending = false;
         }
     }
@@ -176,8 +178,7 @@ void RenderComponent::drawRomList(const std::string& folderName, const std::vect
 
         SDL_SetClipRect(screen, NULL);
 
-        // fav star sits left of the pill so row repaints never touch it
-        if (menu == MENU_ROM && isFav(romData[i].second)) {
+        if ((menu == MENU_ROM || menu == MENU_SEARCH_RESULTS) && isFav(romData[i].second)) {
             int rr = std::max(6, textSurface->h * 3 / 10);
             int cx = startX - 12 - rr;
             if (cx - rr > 2) drawFavStar(cx, startY + textSurface->h / 2, rr, false);
@@ -186,10 +187,9 @@ void RenderComponent::drawRomList(const std::string& folderName, const std::vect
         startY += stepY;
     }
 
-    // deferred + cached, never blocks scrolling (Performance Mode skips it)
     if (!m_textOnly) {
         requestThumbnail(romData[currentRomIndex].second, exactArt);
-        drawListArt(thumbnail, menu == MENU_FOLDER);   // card behind system logos
+        drawListArt(thumbnail, m_listArtIsLogo);   // card behind baked wordmarks only
     }
 
     std::string pageInfo = std::to_string(currentRomIndex + 1) + " / " + std::to_string(romData.size());
@@ -211,7 +211,6 @@ void RenderComponent::drawAppSettings(const std::string& settingsTitle, const st
         drawAppSettingRow(settingList[i], selected, startX, rowY, bgWidth, vol, false);
     };
     auto sbar = [&]{ drawListScrollBar(1, startY0, stepY, itemsPerPage, (int)n); };
-
     // vol changes without the cursor moving, so pass it as aux
     if (incrementalRows(1, n, currentSettingIndex, itemsPerPage, startY0, stepY, rowCb, (int)vol, sbar, 2))
         return;
@@ -224,7 +223,7 @@ void RenderComponent::drawAppSettings(const std::string& settingsTitle, const st
     for (int i = startIndex; i < endIndex; i++) { rowCb(i, i == currentSettingIndex, rowY); rowY += stepY; }
     sbar();
 
-    drawCommonInfo("", settingsTitle);   // caller passes the full breadcrumb
+    drawCommonInfo("", settingsTitle);
 }
 
 void RenderComponent::printFPS(int fps) {
@@ -238,10 +237,9 @@ void RenderComponent::printFPS(int fps) {
 
         int w = 0, h = 0;
         TTF_SizeUTF8(headerFont, fpsText.c_str(), &w, &h);
-        // fixed max-width region so a shrinking number leaves no old digits behind
+        // fixed max width so a shrinking number leaves no old digits
         int maxW = 0, mh = 0;
         TTF_SizeUTF8(headerFont, "FPS: 9999", &maxW, &mh);
-
         // renderTextEx centers vertically on topy, so the rect must span y-h/2
         SDL_Rect r = {(Sint16)(screenWidth/2 - maxW/2 - 4), (Sint16)(topy - h/2 - 2),
                       (Uint16)(maxW + 8), (Uint16)(h + 4)};
@@ -310,14 +308,12 @@ void RenderComponent::update() {
     }
     m_fullFrame = false;
     m_damage.clear();
-
     // mirror fb0 into the FPGA DDR scanout, no-op unless CONSOLEMODE_CRT=1
     crt::pushFrame();
 }
 
 std::unordered_map<std::string, std::string> RenderComponent::aliasMap;
 std::unordered_map<std::string, std::string> RenderComponent::coreNameMap;
-
 // MiSTer names.txt, "CoreName: Display Name" per line
 void RenderComponent::loadCoreNames(const std::string& path) {
     std::ifstream f(path);
@@ -335,7 +331,6 @@ const std::string* RenderComponent::coreNameLookup(const std::string& key) {
     auto it = coreNameMap.find(key);
     return (it != coreNameMap.end()) ? &it->second : nullptr;
 }
-
 // alias.txt wins
 void RenderComponent::loadRomsetAliases(const std::string& xmlPath) {
     std::ifstream f(xmlPath);
@@ -369,7 +364,6 @@ void RenderComponent::loadRomsetAliases(const std::string& xmlPath) {
         aliasMap.emplace(name, alt);
     }
 }
-
 // stem \t title
 void RenderComponent::loadNameAliases(const std::string& tsvPath) {
     std::ifstream f(tsvPath);
@@ -386,5 +380,3 @@ const std::string* RenderComponent::aliasLookup(const std::string& key) {
     auto it = aliasMap.find(key);
     return (it != aliasMap.end()) ? &it->second : nullptr;
 }
-
-

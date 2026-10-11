@@ -4,14 +4,13 @@
 #include "Configuration.h"
 #include "Exception.h"
 #include "utils.h"
-#include "IniSafe.h"        // atomic writes + corrupt-file recovery
+#include "IniSafe.h"
 #include <iostream>
 #include <boost/property_tree/ini_parser.hpp>
 #include <boost/property_tree/json_parser.hpp>
 #include <boost/algorithm/string.hpp>
 #include <filesystem>
 #include <cstring>
-
 // config.ini
 const std::string Configuration::GLOBAL = std::string("GLOBAL");
 const std::string Configuration::APPLICATION = std::string("APPLICATION");
@@ -26,7 +25,7 @@ const std::string Configuration::SCREEN_WIDTH = std::string("GLOBAL.screenWidth"
 const std::string Configuration::SCREEN_HEIGHT = std::string("GLOBAL.screenHeight");
 const std::string Configuration::SCREEN_DEPTH = std::string("GLOBAL.screenDepth");
 const std::string Configuration::SCREEN_RES = std::string("APPLICATION.screenRes");
-const std::string Configuration::MISTER_INI_RES = std::string("APPLICATION.misterIniRes");   // editable, Enter writes video_mode to the active ini
+const std::string Configuration::MISTER_INI_RES = std::string("APPLICATION.misterIniRes");
 const std::string Configuration::MISTER_INI_HDR = std::string("APPLICATION.misterIniHdr");
 const std::string Configuration::MISTER_INI_SD = std::string("APPLICATION.misterIniScandoubler");
 const std::string Configuration::CUSTOM_BG_COLOR = std::string("APPLICATION.customBgColor");
@@ -35,6 +34,8 @@ const std::string Configuration::CRT_FONT = std::string("APPLICATION.crtFont");
 const std::string Configuration::GAME_STYLE = std::string("APPLICATION.gameStyle");
 const std::string Configuration::BUTTON_STYLE = std::string("APPLICATION.buttonStyle");
 const std::string Configuration::CLOCK_FORMAT = std::string("APPLICATION.clockFormat");
+const std::string Configuration::ICON_SET = std::string("APPLICATION.iconSet");
+const std::string Configuration::TIMEZONE = std::string("APPLICATION.timezone");
 const std::string Configuration::BOOT_TO_GAMES = std::string("APPLICATION.bootToGames");
 const std::string Configuration::HIDE_SECTIONS = std::string("APPLICATION.hideSections");
 const std::string Configuration::HIDDEN_SECTIONS = std::string("APPLICATION.hiddenSections");
@@ -92,15 +93,16 @@ const std::string Configuration::SFX_NAV = std::string("APPLICATION.navSound");
 const std::string Configuration::SFX_NAV_FILE = std::string("APPLICATION.sfxNav");
 const std::string Configuration::LOADSCRIPT = std::string("DEVTOOLS.loadScript");
 const std::string Configuration::SHOW_HOMEBREW = std::string("DEVTOOLS.showHomebrew");
+const std::string Configuration::SHOW_MUSIC = std::string("DEVTOOLS.showMusic");
 const std::string Configuration::AUTOBOOT = std::string("DEVTOOLS.autoboot");
 const std::string Configuration::BOOT_MAIN_MENU = std::string("DEVTOOLS.bootMainMenu");
 const std::string Configuration::TITLE_FILTER = std::string("DEVTOOLS.titleFiltering");
 const std::string Configuration::LOCK_FLIX_TITLE = std::string("DEVTOOLS.lockFlixTitle");
 const std::string Configuration::CENTER_LIST = std::string("DEVTOOLS.centerList");
+const std::string Configuration::ROUND_SEL = std::string("DEVTOOLS.roundedSelection");
 const std::string Configuration::SHOW_RESUME = std::string("DEVTOOLS.showResume");
 const std::string Configuration::BOOT_SPEED = std::string("DEVTOOLS.bootSpeed");
 const std::string Configuration::PERF_MODE = std::string("DEVTOOLS.perfMode");
-
 
 const std::string Configuration::CORE_SELECTION = std::string("SYSTEM.coreSelection");
 
@@ -109,7 +111,6 @@ const std::string Configuration::ROM_AUTOSTART = std::string("GAME.romAutostart"
 const std::string Configuration::CORE_OVERRIDE = std::string("GAME.coreOverride");
 
 const std::string Configuration::GLOBAL_VOLUME = std::string("VOLUME.globalVolume");
-
 // theme.ini
 const std::string Configuration::SEL_ITEM_FONT_COLOR = std::string("DEFAULT.selected_item_font_color");
 const std::string Configuration::ITEMS_FONT_COLOR = std::string("DEFAULT.items_font_color");
@@ -147,12 +148,11 @@ const std::string Configuration::HISTORY = std::string("HISTORY");
 const std::string Configuration::FAVORITES = std::string("FAVORITES");
 const std::string Configuration::HIDDEN = std::string("HIDDEN");
 
-Configuration::Configuration(const std::string& configIniFilepath, 
-                             const std::string& gamelistpath, 
-                             const std::string& stateFilepath) 
+Configuration::Configuration(const std::string& configIniFilepath,
+                             const std::string& gamelistpath,
+                             const std::string& stateFilepath)
     : configIniFilepath(configIniFilepath), gamelistpath(gamelistpath),stateFilepath(stateFilepath) {
-
-    // corrupt config.ini -> boot on defaults but seed homePath, nothing else regenerates it
+    // corrupt config.ini, boot on defaults but seed homePath
     if (!inisafe::readIni(configIniFilepath, mainPt)) {
         if (mainPt.get_optional<std::string>("GLOBAL.homePath") == boost::none)
             mainPt.put("GLOBAL.homePath", std::string(getHomePath()) + "/");
@@ -178,7 +178,7 @@ Configuration::Configuration(const std::string& configIniFilepath,
                 s = home + "/media/images" + s.substr(std::strlen("/media/images"));
             mainPt.put(k, s);
         }
-        // keep the device's configured dims so a save doesn't clobber them with the mac window size
+
         for (const char* k : { "GLOBAL.screenWidth", "GLOBAL.screenHeight" }) {
             auto v = mainPt.get_optional<std::string>(k);
             if (v) m_macOrigPaths[k] = *v;
@@ -195,7 +195,6 @@ Configuration::Configuration(const std::string& configIniFilepath,
             file.close();
         }
     }
-
     // corrupt gamelist.ini -> back up, start with empty favorites/history
     if (!inisafe::readIni(gamelistpath, gameListPt)) {
         gameListPt.put_child("FAVORITES", boost::property_tree::ptree());
@@ -211,21 +210,21 @@ void Configuration::set(const std::string& id, const std::string& value) {
 }
 
 std::string Configuration::get(const std::string& id) const {
-    // missing key -> "" instead of throwing
+
     return mainPt.get<std::string>(id, std::string());
 }
 
 bool Configuration::getBool(const std::string& id) const {
-    // missing key -> false, never throws
+
     return mainPt.get<bool>(id, false);
 }
 
 int Configuration::getInt(const std::string& id) const {
-    // missing key -> 0, never throws
+
     return mainPt.get<int>(id, 0);
 }
 
-std::set<std::string> Configuration::getList(const std::string& id, 
+std::set<std::string> Configuration::getList(const std::string& id,
                                              const char delimiter) const {
     std::set<std::string> result;
     std::string value = get(id);
@@ -243,13 +242,12 @@ std::set<std::string> Configuration::getList(const std::string& id,
     return result;
 }
 
-
 void Configuration::getHistoryOrFavoList(const std::string& name, std::vector<std::string>& list)
 {
     if (auto his = gameListPt.get_child_optional(name))  {
         for (auto& child : *his) {
             std::string value = child.second.data();
-            // keep every entry, don't prune paths absent now (unplugged/late USB) or they're lost
+            // don't prune paths that are absent now, a late USB would lose them
             if (!value.empty()) list.push_back(value);
         }
     }
@@ -260,9 +258,9 @@ void Configuration::setHistoryOrFavoList(const std::string& name, std::vector<st
     auto ptree = gameListPt.get_child_optional(name);
     if (!ptree)
         ptree = gameListPt.put_child(name, {});
-    
+
     if (ptree)
-    {       
+    {
         ptree->clear();
         std::string key = "";
         int count = 0;
@@ -274,11 +272,10 @@ void Configuration::setHistoryOrFavoList(const std::string& name, std::vector<st
     }
 }
 
-
 std::map<std::string, ConsoleData> Configuration::parseIniFile(const std::string& iniPath) {
     std::map<std::string, ConsoleData> consoleDataMap;
     boost::property_tree::ptree pt;
-    // skip a stray/incomplete section_groups file instead of throwing ptree_bad_path
+    // a stray section_groups file would throw ptree_bad_path
     try {
         if (!inisafe::readIni(iniPath, pt)) return consoleDataMap;
         auto consoleList = pt.get<std::string>("CONSOLES.consoleList");
@@ -312,7 +309,7 @@ std::map<std::string, ConsoleData> Configuration::parseIniFile(const std::string
         }
     } catch (const std::exception& e) {
         logMessage(ERROR, "parseIniFile", (iniPath + ": " + e.what()).c_str());
-        inisafe::g_fileReset = true;   // surface the one-time "file skipped/reset" notice
+        inisafe::g_fileReset = true;
     }
     return consoleDataMap;
 }
@@ -335,7 +332,7 @@ void Configuration::saveConfigIni() {
 }
 
 void Configuration::saveGameListIni(){
-    inisafe::writeIniAtomic(gamelistpath, gameListPt);   // atomic so a power cut can't truncate the list
+    inisafe::writeIniAtomic(gamelistpath, gameListPt);
 }
 
 State Configuration::loadState() {
@@ -350,7 +347,7 @@ State Configuration::loadState() {
 
     State state;
     try {
-        std::string currentMenuLevelStr = 
+        std::string currentMenuLevelStr =
             statePt.get<std::string>("currentMenuLevel");
 
         if (currentMenuLevelStr == "MENU_MAIN") {
@@ -388,12 +385,19 @@ State Configuration::loadState() {
             logMessage(INFO, "loadState",
                        ("unknown currentMenuLevel: " + currentMenuLevelStr).c_str());
         }
-            
+
         state.currentSectionIndex = statePt.get<int>("currentSectionIndex");
-        state.resumePath = statePt.get<std::string>("resumePath");  
+        state.resumePath = statePt.get<std::string>("resumePath");
 
         state.currentFolderIndex = statePt.get<int>("currentFolderIndex");
         state.currentRomIndex = statePt.get<int>("currentRomIndex");
+        state.romFolderStack.clear();
+        {   // "2,0,5" -> indices
+            std::stringstream fs(statePt.get<std::string>("romFolderStack", ""));
+            std::string tok;
+            while (std::getline(fs, tok, ','))
+                if (!tok.empty()) state.romFolderStack.push_back(std::atoi(tok.c_str()));
+        }
 
         state.currentMainIndex = 0;
 
@@ -402,11 +406,9 @@ State Configuration::loadState() {
         state.currentFavoritesIndex = statePt.get<int>("currentFavoritesIndex");
         state.currentHistoryIndex = statePt.get<int>("currentHistoryIndex");
 
-        // defaulted so older state files without these keys still load
         state.currentHomebrewFolderIndex = statePt.get<int>("currentHomebrewFolderIndex", 0);
         state.currentHomebrewGameIndex   = statePt.get<int>("currentHomebrewGameIndex", 0);
 
-    
     } catch (const std::exception&) {
         // partial/old state.json, keep whatever parsed
     }
@@ -414,13 +416,12 @@ State Configuration::loadState() {
     return state;
 }
 
-
 void Configuration::saveState(const State& state) {
-    
+
         boost::property_tree::ptree statePt;
-    
+
         std::string currentMenuLevelStr;
-        switch (state.currentMenuLevel) {            
+        switch (state.currentMenuLevel) {
             case MenuLevel::MENU_SECTION:
                 currentMenuLevelStr = "MENU_SECTION";
                 break;
@@ -452,13 +453,13 @@ void Configuration::saveState(const State& state) {
 #endif
             case MenuLevel::MENU_HOMEBREW_FOLDER:
                 currentMenuLevelStr = "MENU_HOMEBREW_FOLDER";
-                break; 
+                break;
             case MenuLevel::MENU_HOMEBREW_GAME:
                 currentMenuLevelStr = "MENU_HOMEBREW_GAME";
                 break;
             case MenuLevel::MENU_SUBROM:
                 currentMenuLevelStr = "MENU_ROM";
-                break; 
+                break;
             case MenuLevel::MENU_SELECT_CORE:
                 currentMenuLevelStr = "MENU_ROM";
                 break;
@@ -467,18 +468,23 @@ void Configuration::saveState(const State& state) {
                 break;
 
             default:
-                // any non-persistable level persists as MENU_MAIN instead of throwing
+                // any non-persistable level persists as MENU_MAIN
                 logMessage(INFO, "saveState default->MENU_MAIN",
                            std::to_string((int)state.currentMenuLevel).c_str());
                 currentMenuLevelStr = "MENU_MAIN";
                 break;
         }
-    
+
         statePt.put("currentMenuLevel", currentMenuLevelStr);
-        
+
         statePt.put("currentSectionIndex", state.currentSectionIndex);
         statePt.put("currentFolderIndex", state.currentFolderIndex);
         statePt.put("currentRomIndex", state.currentRomIndex);
+        {
+            std::string fs;
+            for (int i : state.romFolderStack) { if (!fs.empty()) fs += ","; fs += std::to_string(i); }
+            statePt.put("romFolderStack", fs);
+        }
 
         statePt.put("currentMainIndex", state.currentMainIndex);
         statePt.put("currentRbfIndex", state.currentRbfIndex);
@@ -490,7 +496,7 @@ void Configuration::saveState(const State& state) {
         statePt.put("currentHomebrewGameIndex", state.currentHomebrewGameIndex);
 
         statePt.put("resumePath", state.resumePath);
-    
+
         inisafe::writeJsonAtomic(stateFilepath, statePt);
-    
+
 }

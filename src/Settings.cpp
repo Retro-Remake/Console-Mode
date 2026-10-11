@@ -18,26 +18,26 @@
 #include "Exception.h"
 #include "crt_video.h"
 #include <unordered_map>
-
 // English fallback labels used when languages.ini lacks a key
 static std::string defaultSettingLabel(const std::string& id) {
     static const std::unordered_map<std::string,std::string> kDefaults = {
         // App settings
         {"volume","Volume"}, {"net","Network"}, {"bluetooth","Bluetooth"},
-        {"bgColor","Background Color"}, {"bgArt","Background Artwork"}, {"selColor","Selection Color"}, {"gameStyle","Game Style"}, {"buttonStyle","Button Labels"}, {"clockFormat","Clock Format"}, {"bootToGames","Boot to Load Game"}, {"btReconnect","BT Reconnect"}, {"btRePair","BT Re-Pair"}, {"screenRes","Console Mode Resolution"}, {"misterIniRes","MiSTer INI Resolution"}, {"misterIniHdr","MiSTer INI HDR"}, {"misterIniScandoubler","MiSTer INI Scandoubler"}, {"crtOverscan","CRT Overscan"}, {"crtFont","CRT Font"},
+        {"bgColor","Background Color"}, {"bgArt","Background Artwork"}, {"selColor","Selection Color"}, {"gameStyle","Game Style"}, {"buttonStyle","Button Labels"}, {"clockFormat","Clock Format"}, {"iconSet","Category Icons"}, {"timezone","Time Zone"}, {"bootToGames","Boot To"}, {"btReconnect","BT Reconnect"}, {"btRePair","BT Re-Pair"}, {"screenRes","Console Mode Resolution"}, {"misterIniRes","MiSTer INI Resolution"}, {"misterIniHdr","MiSTer INI HDR"}, {"misterIniScandoubler","MiSTer INI Scandoubler"}, {"crtOverscan","CRT Overscan"}, {"crtFont","CRT Font"},
         {"loadConfig","System Config"}, {"updateTime","Set Time"}, {"clearcache","Rebuild Game Database"},
         {"update","Update"}, {"updateCM","Update Console Mode"}, {"scrapeArtwork","Scrape Artwork"}, {"optimizeArtwork","Optimize Artwork"}, {"importGamelist","Import gamelist.xml"}, {"manageHidden","Manage Hidden Games"}, {"hideSections","Hide Categories"},
-        {"devtools","Developer Tools"}, {"quit","Quit"}, {"inputTester","Input Tester"}, {"kbMapping","Console Mode Keyboard Mapping"}, {"cdTester","CD Tester"},
+        {"devtools","Developer Tools"}, {"quit","Quit"}, {"inputTester","Input Tester"}, {"kbMapping","Console Mode Keyboard Mapping"}, {"cdTester","CD Player"},
         {"abSwap","Console Mode A/B Swap"}, {"xySwap","Console Mode X/Y Swap"}, {"promptSwap","Swap Button Prompts"},
         // Developer tools
         {"showFPS","Show FPS"}, {"bootMainMenu","Boot To Main Menu"}, {"ss4Anim","SS4 Animation"}, {"useMirror","Console Mode Update Mirror"}, {"screenRefresh","CM Refresh Rate"}, {"showHomebrew","Show Homebrew"},
         {"showResume","Show Resume Game"}, {"historySize","History Size"}, {"titleFiltering","Title Filtering"}, {"controls","Controls"},
-        {"lockFlixTitle","Lock NX Title"}, {"centerList","Center List Selection"}, {"bootSpeed","App Boot Speed"}, {"perfMode","Performance Mode"},
+        {"lockFlixTitle","Lock NX Title"}, {"centerList","Center List Selection"},
+        {"roundedSelection","Rounded Selection"}, {"bootSpeed","App Boot Speed"}, {"perfMode","Performance Mode"},
         {"autoboot","Console Mode Autoboot"}, {"loadScript","Load Script"},
 #ifdef HAS_PS1
         {"discOptions","Disc Options"},
 #endif
-        {"bgm","Set Static BGM"}, {"bgmVolume","BGM Volume"},
+        {"showMusic","Music Section"}, {"bgm","Set Static BGM"}, {"bgmVolume","BGM Volume"},
         {"bgmEnabled","Enable BGM"}, {"bgmMode","Mode"},
         {"bgmMenu","Background Music"}, {"sfxMenu","System Sounds"}, {"confirmSound","Confirm Sound"}, {"backSound","Back Sound"}, {"navSound","Nav Sound"},
         // Rom settings
@@ -64,8 +64,8 @@ void AppSettings::updateBgmMode(bool) {
 }
 
 Settings::Settings(Configuration& cfg, Languages& languages,
-                   int minValue, int maxValue, int delta) 
-    : cfg(cfg), languages(languages), 
+                   int minValue, int maxValue, int delta)
+    : cfg(cfg), languages(languages),
       minValue(minValue), maxValue(maxValue), delta(delta) {
 }
 
@@ -92,6 +92,7 @@ AppSettings::AppSettings(Configuration& cfg, Languages& languages,
         Configuration::GAME_STYLE,
         Configuration::BUTTON_STYLE,
         Configuration::CLOCK_FORMAT,
+        Configuration::ICON_SET,
         Configuration::BG_COLOR,
         Configuration::BG_ART,
         Configuration::SEL_COLOR,
@@ -114,6 +115,7 @@ AppSettings::AppSettings(Configuration& cfg, Languages& languages,
         Configuration::BOOT_TO_GAMES,
         Configuration::LOADCONFIG,
         Configuration::UPDATE_TIME,
+        Configuration::TIMEZONE,
         Configuration::UPDATE,
         Configuration::UPDATE_CM,
         Configuration::DEV_TOOLS,
@@ -127,7 +129,7 @@ RomSettings::RomSettings(Configuration& cfg, Languages& languages,
         : Settings(cfg, languages, minValue, maxValue, delta) {
     defaultKeys = {
         Configuration::ROM_OVERCLOCK, Configuration::ROM_AUTOSTART, Configuration::CORE_OVERRIDE
-    };    
+    };
 
 }
 
@@ -138,7 +140,7 @@ void Settings::navigateUp() {
             currentIndex = enabledKeys.size() - 1;
         }
         currentKey = enabledKeys[currentIndex];
-        currentValue = settingsMap[currentKey].value;   // sync so Left/Right cycles from this row
+        currentValue = settingsMap[currentKey].value;
     }
 }
 
@@ -149,7 +151,7 @@ void Settings::navigateDown() {
             currentIndex = 0;
         }
         currentKey = enabledKeys[currentIndex];
-        currentValue = settingsMap[currentKey].value;   // sync so Left/Right cycles from this row
+        currentValue = settingsMap[currentKey].value;
     }
 }
 
@@ -179,26 +181,26 @@ std::vector<Settings::SettingRow> AppSettings::getAppSettings() {
 }
 
 std::vector<Settings::SettingRow> RomSettings::getRomSettings() {
-    
+
     std::vector<SettingRow> settingRows;
-    
+
     for (const auto& key : enabledKeys) {
 
         if (key.find("GAME.") == 0) {
-        
+
             size_t pos = key.find_last_of(".");
-            
+
             if (pos != std::string::npos) {
                 try {
-                    settingRows.push_back({languages.getOr(key.substr(pos + 1), defaultSettingLabel(key.substr(pos + 1))), 
+                    settingRows.push_back({languages.getOr(key.substr(pos + 1), defaultSettingLabel(key.substr(pos + 1))),
                                             settingsMap[key].value
                                             });
                 } catch (boost::property_tree::ptree_bad_path e) {
-                    throw ItemNotFoundException("getRomSettings Language translation not found for " 
+                    throw ItemNotFoundException("getRomSettings Language translation not found for "
                     + key + " in " + languages.getLang());
                 }
             } else {
-                throw ItemNotFoundException("Setting key format unknown: " 
+                throw ItemNotFoundException("Setting key format unknown: "
                     + key);
             }
         }
@@ -216,7 +218,6 @@ static const char* kMisterVideoModes[] = {
 };
 static const int kMisterVideoModeCount = 15;
 
-// "Mode N - res" for a preset, bare "Mode N" if out of range
 static std::string misterModeDesc(int mode) {
     std::string s = "Mode " + std::to_string(mode);
     if (mode >= 0 && mode < kMisterVideoModeCount) s += " - " + std::string(kMisterVideoModes[mode]);
@@ -263,7 +264,6 @@ std::string Settings::parseMisterIniVideoMode() {
     }
     return commented.empty() ? "Not set" : commented;
 }
-
 // m_iniVmSel: 0 = keep current, 1..15 = write video_mode 0..14
 std::string Settings::misterIniVmLabel(int sel) {
     if (sel <= 0) return m_iniVmCurrent;
@@ -278,11 +278,10 @@ void Settings::updateMisterIniVideoMode(bool increase) {
 }
 
 bool Settings::applyMisterIniVideoMode() {
-    if (m_iniVmSel <= 0) return false;   // "keep current" -> nothing to write
+    if (m_iniVmSel <= 0) return false;
     return writeMisterIniVideoMode(m_iniVmSel - 1);
 }
-
-// atomic rewrite (tmp + fsync + rename) that keeps the user's comments, unlike a ptree round-trip
+// tmp + fsync + rename, keeps the user's comments
 static bool writeLinesAtomic(const std::string& path, const std::vector<std::string>& lines) {
     std::string tmp = path + ".cmtmp";
     {
@@ -295,12 +294,11 @@ static bool writeLinesAtomic(const std::string& path, const std::vector<std::str
     int fd = open(tmp.c_str(), O_RDONLY);
     if (fd >= 0) { fsync(fd); close(fd); }
     std::error_code ec;
-    std::filesystem::rename(tmp, path, ec);      // atomic replace on the same fs
+    std::filesystem::rename(tmp, path, ec);
     if (ec) { std::filesystem::remove(tmp, ec); return false; }
     return true;
 }
 
-// rewrite one ini's video_mode, preserving everything else
 static bool applyVideoModeToIni(const std::string& iniFile, int mode) {
     std::ifstream in(iniFile);
     if (!in) return false;
@@ -335,9 +333,7 @@ static bool applyVideoModeToIni(const std::string& iniFile, int mode) {
     return writeLinesAtomic(iniFile, lines);
 }
 
-
 static const char* kHdrLabels[3] = { "Off", "HDR10", "HDR10 DCI-P3" };
-
 // an active line beats a commented one
 std::string Settings::parseMisterIniHdr() {
     std::ifstream f(activeMisterIniPath());
@@ -492,16 +488,13 @@ bool Settings::writeMisterIniVideoMode(int mode) {
     // target only the active ini, each variant carries its own video_mode
     return applyVideoModeToIni(activeMisterIniPath(), mode);
 }
-
-// RetroAchievements: toggle a per-core main=<binary> chain-load line in the active ini
+// RA chain-loads through a per-core main=<binary> line
 std::string Settings::activeMisterIniPath() {
     std::string dir = cfg.get(Configuration::HOME_PATH);
     const char* nm = misterIniName(misterCurrentAlt(), dir.c_str());
     return dir + "/" + ((nm && nm[0]) ? nm : "MiSTer.ini");
 }
-
-
-// case-insensitive [coreName] span [start+1, end), start = -1 if absent
+// case-insensitive [coreName] span, start = -1 if absent
 static void findIniSection(const std::vector<std::string>& lines, const std::string& coreName,
                            int& start, int& end) {
     std::string want = lowerCopy("[" + coreName + "]");
@@ -516,7 +509,6 @@ static void findIniSection(const std::vector<std::string>& lines, const std::str
     if (start < 0) end = -1;
 }
 
-// active (uncommented) main=<mainName> present in [coreName]?
 bool Settings::misterIniMainOverrideEnabled(const std::string& coreName, const std::string& mainName) {
     std::ifstream f(activeMisterIniPath());
     if (!f) return false;
@@ -540,7 +532,6 @@ bool Settings::misterIniMainOverrideEnabled(const std::string& coreName, const s
     return false;
 }
 
-// toggle main=<mainName> in [coreName] of the active ini
 bool Settings::setMisterIniMainOverride(const std::string& coreName, const std::string& mainName, bool enable) {
     std::string iniFile = activeMisterIniPath();
     std::ifstream in(iniFile);
@@ -550,7 +541,6 @@ bool Settings::setMisterIniMainOverride(const std::string& coreName, const std::
 
     int s, e; findIniSection(lines, coreName, s, e);
     const std::string mainLine = "main=" + mainName;
-
     // classify: 0 none, 1 active main=<mainName>, 2 commented main=<mainName>, 3 active main=<other>
     auto classify = [&](const std::string& t) -> int {
         size_t b = t.find_first_not_of(" \t\r\n");
@@ -595,7 +585,6 @@ bool Settings::setMisterIniMainOverride(const std::string& coreName, const std::
     return writeLinesAtomic(iniFile, lines);
 }
 
-// informational: is an installer-style [RA_*] wildcard block present in the active ini?
 bool Settings::misterIniHasRaWildcard() {
     std::ifstream f(activeMisterIniPath());
     if (!f) return false;
@@ -631,7 +620,6 @@ void Settings::initializeSettings() {
     selColors.push_back(BLUE);
     selColors.push_back(YELLOW);
     selColors.push_back(RED);
-
     // Flix renders as List until built
     gameStyles.clear();
     gameStyles.push_back("List View");
@@ -652,6 +640,15 @@ void Settings::initializeSettings() {
     clockFormats.push_back("24-Hour");
     clockFormats.push_back("12-Hour");
 
+    iconSets.clear();
+    iconSets.push_back("Dark");
+    iconSets.push_back("Default");
+
+    bootTargets.clear();
+    bootTargets.push_back("Main Menu");
+    bootTargets.push_back("Load Game");
+    bootTargets.push_back("History");
+    bootTargets.push_back("Favorites");
     // BT reconnect policy consumed by bt_boot.sh
     btReconnectModes.clear();
     btReconnectModes.push_back("Balanced");    // boot/drop windows + slow steady poll
@@ -662,7 +659,6 @@ void Settings::initializeSettings() {
     btRepairModes.clear();
     btRepairModes.push_back("Auto-Accept");    // pads may re-pair anytime
     btRepairModes.push_back("Menu Only");      // pairing accepted only in the BT menu
-
     // CRT-only font look: Sharp / Smooth / Legible
     crtFonts.clear();
     crtFonts.push_back("Sharp");
@@ -677,7 +673,7 @@ void Settings::initializeSettings() {
     for (const auto& key : defaultKeys) {
         // every key is always shown, config.ini only supplies the value
         std::string value = cfg.get(key);
-        // seed History Size so updateInt's stoi doesn't throw on a missing key
+        // seed History Size so stoi does not throw on a missing key
         if (value.empty() && key == Configuration::HISTORY_SIZE) value = "20";
         if (key == Configuration::BOOT_SPEED) {                  // map legacy Fast/Moderate/Slow values
             if (value.empty() || value == "Moderate") value = "Safe";
@@ -697,18 +693,25 @@ void Settings::initializeSettings() {
         if (value.empty() && key == Configuration::AB_SWAP)      value = "false";
         if (value.empty() && key == Configuration::XY_SWAP)      value = "false";
         if (value.empty() && key == Configuration::PROMPT_SWAP)  value = "false";
-        if (value.empty() && key == Configuration::BOOT_TO_GAMES) value = "false";
+        if (key == Configuration::BOOT_TO_GAMES) {
+            if (value == "true") value = "Load Game";           // pre-1.1.4 bool
+            else if (value.empty() || value == "false") value = "Main Menu";
+        }
         if (value.empty() && key == Configuration::CENTER_LIST)   value = "false";
+        if (value.empty() && key == Configuration::ROUND_SEL)     value = "true";
+        if (value.empty() && key == Configuration::SHOW_MUSIC)     value = "true";
         if (value.empty() && key == Configuration::BG_ART)       value = "true";
         if (value.empty() && key == Configuration::PERF_MODE)    value = "Off";
         if (value.empty() && key == Configuration::CRT_OVERSCAN) value = "0%";
         if (value.empty() && key == Configuration::CRT_FONT)      value = "Sharp";
         if (value.empty() && key == Configuration::CLOCK_FORMAT)  value = "24-Hour";
+        if (value.empty() && key == Configuration::ICON_SET)      value = "Dark";
+        if (value.empty() && key == Configuration::TIMEZONE)      value = Configuration::TIMEZONE_DEFAULT;
         if (value.empty() && key == Configuration::BT_RECONNECT)  value = "Balanced";
         if (value.empty() && key == Configuration::BT_REPAIR)     value = "Auto-Accept";
         if (key == Configuration::MISTER_INI_RES) {                                     // computed, not stored
             value = parseMisterIniVideoMode();
-            // show which ini this row reads/writes for alt-ini setups
+
             std::string ini = activeMisterIniPath();
             size_t sl = ini.find_last_of('/');
             std::string base = (sl == std::string::npos) ? ini : ini.substr(sl + 1);
@@ -729,8 +732,7 @@ void Settings::initializeSettings() {
         if (!value.empty())
             notifySettingsChange(key, value);
     }
-
-    // gate on the CONSOLEMODE_CRT env, not crt::active() which is false before crt::init() runs
+    // crt::active() is false before crt::init() runs
     if (settingsMap.count(Configuration::CRT_OVERSCAN)) {
         const char* crtEnv = getenv("CONSOLEMODE_CRT");
         settingsMap[Configuration::CRT_OVERSCAN].enabled =
@@ -738,13 +740,11 @@ void Settings::initializeSettings() {
         int pct = 0; try { pct = std::stoi(settingsMap[Configuration::CRT_OVERSCAN].value); } catch (...) {}
         crt::setOverscan(pct);
     }
-
     // 31kHz menu modes only
     if (settingsMap.count(Configuration::MISTER_INI_SD))
         settingsMap[Configuration::MISTER_INI_SD].enabled =
             (crt::videoMode() >= crt::MODE_480P && crt::videoMode() <= crt::MODE_480P_SQ);
 
-    // CRT-only, gate on the CRT env like CRT Overscan
     if (settingsMap.count(Configuration::CRT_FONT)) {
         const char* crtEnv = getenv("CONSOLEMODE_CRT");
         settingsMap[Configuration::CRT_FONT].enabled =
@@ -778,13 +778,13 @@ std::vector<std::string> Settings::getEnabledKeys() {
 
 void Settings::updateInt(bool increase, std::string setting,
                          int min, int max, int inc) {
-    // blank/garbage value would make stoi throw, so fall back to min
+    // stoi throws on a blank or garbage value
     int intValue;
     try { intValue = std::stoi(settingsMap[setting].value); }
     catch (...) { intValue = min; }
     if (increase) {
         if (intValue + inc <= max) {
-            intValue += inc; 
+            intValue += inc;
         }
 
     } else if (!increase && intValue - inc >= min) {
@@ -802,7 +802,7 @@ void Settings::updateString(std::string key, std::string value)
 
 void Settings::updateListSetting(const std::set<std::string>& values, bool increase) {
     auto it = values.find(currentValue);
-    
+
     if (!increase) {
         if (it == values.begin()) {
             it = std::prev(values.end());
@@ -817,7 +817,6 @@ void Settings::updateListSetting(const std::set<std::string>& values, bool incre
     }
     currentValue = *it;
 }
-
 
 void Settings::updateListVector(const std::vector<std::string>& values, bool increase, bool isSystemConfig)
 {
@@ -843,7 +842,6 @@ void Settings::updateListVector(const std::vector<std::string>& values, bool inc
     if(isSystemConfig)
         iniIndex = idx;
 }
-
 
 void AppSettings::updateConfigIni(bool increase) {
     updateListVector(MisterInis, increase);
@@ -883,6 +881,18 @@ void AppSettings::updateClockFormat(bool increase)
     settingsMap[Configuration::CLOCK_FORMAT].value = currentValue;
 }
 
+void AppSettings::updateBootTo(bool increase)
+{
+    updateListVector(bootTargets, increase, false);
+    settingsMap[Configuration::BOOT_TO_GAMES].value = currentValue;
+}
+
+void AppSettings::updateIconSet(bool increase)
+{
+    updateListVector(iconSets, increase, false);
+    settingsMap[Configuration::ICON_SET].value = currentValue;
+}
+
 void AppSettings::updateBtReconnect(bool increase)
 {
     updateListVector(btReconnectModes, increase, false);
@@ -904,7 +914,6 @@ void AppSettings::updateTime()
 void AppSettings::updateUSBMode(bool increase) {
 }
 
-
 void AppSettings::updateOverclock(bool increase) {
 }
 
@@ -914,7 +923,6 @@ void Settings::updateBoolSetting() {
     currentValue = value ? "true" : "false";
     settingsMap[currentKey].value = currentValue;
 }
-
 
 void AppSettings::restartApplication() {
 }
@@ -952,11 +960,9 @@ std::string Settings::getCurrentValue() {
     return settingsMap[currentKey].value;
 };
 
-
 int AppSettings::getConfigIndex(){
     return iniIndex;
 }
-
 
 void AppSettings::reloadSettingRows() {
     settingRows.clear();
@@ -966,25 +972,24 @@ void AppSettings::reloadSettingRows() {
         if (key.find("APPLICATION.") == 0) {
 
             size_t pos = key.find_last_of(".");
-            
+
             if (pos != std::string::npos) {
                 try {
-                    settingRows.push_back({languages.getOr(key.substr(pos + 1), defaultSettingLabel(key.substr(pos + 1))), 
+                    settingRows.push_back({languages.getOr(key.substr(pos + 1), defaultSettingLabel(key.substr(pos + 1))),
                                             settingsMap[key].value
                                             });
                 } catch (boost::property_tree::ptree_bad_path e) {
-                    throw ItemNotFoundException("reloadSettingRows Language translation not found for " 
+                    throw ItemNotFoundException("reloadSettingRows Language translation not found for "
                     + key + " in " + languages.getLang());
                 }
             } else {
-                throw ItemNotFoundException("Setting key format unknown: " 
+                throw ItemNotFoundException("Setting key format unknown: "
                     + key);
             }
         }
     }
 }
 
-// settings observers
 void Settings::attach(ISettingsObserver *observer) {
     observers.push_back(observer);
 }
@@ -1010,9 +1015,6 @@ std::string RomSettings::getName() {
     return "RomSettings::" + std::to_string((unsigned long long)(void**)this);
 }
 
-
-
-
 std::string DevSettings::getName() {
     return "DevSettings:" + std::to_string((unsigned long long)(void**)this);
 }
@@ -1029,37 +1031,38 @@ void DevSettings::reloadSettingRows() {
         if (key.find("DEVTOOLS.") == 0) {
 
             size_t pos = key.find_last_of(".");
-            
+
             if (pos != std::string::npos) {
                 try {
-                    settingRows.push_back({languages.getOr(key.substr(pos + 1), defaultSettingLabel(key.substr(pos + 1))), 
+                    settingRows.push_back({languages.getOr(key.substr(pos + 1), defaultSettingLabel(key.substr(pos + 1))),
                                             settingsMap[key].value
                                             });
                 } catch (boost::property_tree::ptree_bad_path e) {
-                    throw ItemNotFoundException("DevSettings reloadSettingRows Language translation not found for " 
+                    throw ItemNotFoundException("DevSettings reloadSettingRows Language translation not found for "
                     + key + " in " + languages.getLang());
                 }
             } else {
-                throw ItemNotFoundException("Setting key format unknown: " 
+                throw ItemNotFoundException("Setting key format unknown: "
                     + key);
             }
         }
     }
 }
 
-
-DevSettings::DevSettings(Configuration& cfg, Languages& languages, 
+DevSettings::DevSettings(Configuration& cfg, Languages& languages,
                                int minValue, int maxValue, int delta)
     : Settings(cfg, languages, minValue, maxValue, delta) {
     defaultKeys = {
         Configuration::SHOW_FPS,
         Configuration::SCREEN_REFRESH,
         Configuration::SHOW_HOMEBREW,
+        Configuration::SHOW_MUSIC,
         Configuration::SHOW_RESUME,
         Configuration::HISTORY_SIZE,
         Configuration::TITLE_FILTER,
         Configuration::LOCK_FLIX_TITLE,
         Configuration::CENTER_LIST,
+        Configuration::ROUND_SEL,
         Configuration::SS4_ANIM,
         Configuration::USE_MIRROR,
         Configuration::BOOT_SPEED,
@@ -1109,21 +1112,21 @@ int DevSettings::getDevToolSize(){
     for (const auto& key : enabledKeys) {
 
         if (key.find("DEVTOOLS.") == 0) {
-        
+
             size_t pos = key.find_last_of(".");
-            
+
             if (pos != std::string::npos) {
                 try {
-                    settingRows.push_back({languages.getOr(key.substr(pos + 1), defaultSettingLabel(key.substr(pos + 1))), 
+                    settingRows.push_back({languages.getOr(key.substr(pos + 1), defaultSettingLabel(key.substr(pos + 1))),
                                             settingsMap[key].value
                                             });
                 } catch (boost::property_tree::ptree_bad_path e) {
-                    throw ItemNotFoundException("getDevSettings Language translation not found for " 
+                    throw ItemNotFoundException("getDevSettings Language translation not found for "
                     + key + " in " + languages.getLang());
-                    
+
                 }
             } else {
-                throw ItemNotFoundException("Setting key format unknown: " 
+                throw ItemNotFoundException("Setting key format unknown: "
                     + key);
             }
         }
@@ -1131,28 +1134,27 @@ int DevSettings::getDevToolSize(){
     return settingRows.size();
 }
 
-
 std::vector<Settings::SettingRow> DevSettings::getDevSettings() {
     std::vector<SettingRow> settingRows;
 
     for (const auto& key : enabledKeys) {
 
         if (key.find("DEVTOOLS.") == 0) {
-        
+
             size_t pos = key.find_last_of(".");
-            
+
             if (pos != std::string::npos) {
                 try {
-                    settingRows.push_back({languages.getOr(key.substr(pos + 1), defaultSettingLabel(key.substr(pos + 1))), 
+                    settingRows.push_back({languages.getOr(key.substr(pos + 1), defaultSettingLabel(key.substr(pos + 1))),
                                             settingsMap[key].value
                                             });
                 } catch (boost::property_tree::ptree_bad_path e) {
-                    throw ItemNotFoundException("getDevSettings Language translation not found for " 
+                    throw ItemNotFoundException("getDevSettings Language translation not found for "
                     + key + " in " + languages.getLang());
-                    
+
                 }
             } else {
-                throw ItemNotFoundException("Setting key format unknown: " 
+                throw ItemNotFoundException("Setting key format unknown: "
                     + key);
             }
         }
@@ -1161,19 +1163,19 @@ std::vector<Settings::SettingRow> DevSettings::getDevSettings() {
 }
 
 void AppSettings::updateOverscan(bool increase) {
-    // 0..5% per edge, applied live and persisted
+    // 0..5% per edge
     int pct = 0; try { pct = std::stoi(settingsMap[Configuration::CRT_OVERSCAN].value); } catch (...) {}
     if (increase)      { if (pct < 5) pct += 1; }
     else               { if (pct > 0)  pct -= 1; }
     currentValue = std::to_string(pct) + "%";
     settingsMap[Configuration::CRT_OVERSCAN].value = currentValue;
-    crt::setOverscan(pct);                                  // live on device, no-op off-CRT
+    crt::setOverscan(pct);
     cfg.set(Configuration::CRT_OVERSCAN, currentValue);
     cfg.saveConfigIni();
 }
 
 void AppSettings::updateCrtFont(bool increase) {
-    // applied live via notifySettingsChange and persisted
+
     updateListVector(crtFonts, increase, false);
     settingsMap[Configuration::CRT_FONT].value = currentValue;
     cfg.set(Configuration::CRT_FONT, currentValue);
@@ -1186,7 +1188,6 @@ void AppSettings::updateResolution(bool increase) {
         {"Default", "320x240", "640x480", "960x540", "1024x768", "1280x720",
          "1920x1080", "2048x1536", "2560x1440"};
         // 2560x1440 = MiSTer pixel-repetition preset (vmode 14)
-
     int idx = 0;
     const std::string& cur = settingsMap[Configuration::SCREEN_RES].value;
     for (size_t i = 0; i < kResList.size(); i++)

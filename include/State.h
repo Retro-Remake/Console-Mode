@@ -4,6 +4,7 @@
 #pragma once
 
 #include <string>
+#include <vector>
 
 enum MenuLevel {
     MENU_MAIN,
@@ -37,6 +38,11 @@ enum MenuLevel {
     MENU_SEARCH_RESULTS,
     MENU_CD_TESTER,
     MENU_BGM,
+    MENU_MUSIC,
+    MENU_MUSIC_PLAYER,
+    MENU_MUSIC_NOWPLAYING,
+    MENU_MUSIC_SETTINGS,
+    MENU_MUSIC_LIB,
 
     MENU_CONTROLS_JOY,
     MENU_CONTROLS_JOY1,
@@ -69,6 +75,8 @@ enum MenuLevel {
     MENU_LICENSE_TEXT,
     MENU_KB_MAP,
     MENU_FEEDBACK,
+    MENU_TIMEZONE,
+    MENU_FAV_FOLDER,
 
     MENU_NONE
 
@@ -92,6 +100,7 @@ struct State {
     int currentSearchIndex;
 
     std::string resumePath;
+    std::vector<int> romFolderStack;   // nested folder indices inside the system, root first
     State()
     {
         currentMenuLevel = MENU_MAIN;

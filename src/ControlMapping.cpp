@@ -20,7 +20,6 @@ ControlMapping::ControlMapping(Configuration& cfg) : m_cfg(cfg) {
     controls["KEY_RIGHT"] = cfg.getInt("CONTROLS.KEY_RIGHT");
     controls["KEY_START"] = cfg.getInt("CONTROLS.KEY_START");
     controls["KEY_SELECT"] = cfg.getInt("CONTROLS.KEY_SELECT");
-
     // letter bindings block type-to-jump
     {
         static const struct { const char* key; int repl; } kMigrate[] = {
@@ -38,7 +37,6 @@ ControlMapping::ControlMapping(Configuration& cfg) : m_cfg(cfg) {
         }
         if (migrated) cfg.saveConfigIni();
     }
-
     // 0 matches an empty sym
     if (controls["KEY_X"] <= 0) controls["KEY_X"] = 47;   // '/'
     if (controls["KEY_Y"] <= 0) controls["KEY_Y"] = 61;   // '='
@@ -68,8 +66,12 @@ int ControlMapping::getControl(const std::string& controlName) const {
     }
 }
 
-ControlMap ControlMapping::padFaceCommand(int role) const {
-    const bool swapAB = m_cfg.getBool(Configuration::AB_SWAP);
+ControlMap ControlMapping::padFaceCommand(int role, const std::string& vidPid) const {
+    bool swapAB = m_cfg.getBool(Configuration::AB_SWAP);
+    if (!vidPid.empty()) {                      // a pad's own setting beats the global one
+        const std::string ov = m_cfg.get("CONTROLS.abSwap_" + vidPid);
+        if (ov == "swap") swapAB = true; else if (ov == "normal") swapAB = false;
+    }
     const bool swapXY = m_cfg.getBool(Configuration::XY_SWAP);
     switch (role) {
         case 0:  return swapAB ? CMD_BACK  : CMD_ENTER;   // A
@@ -99,8 +101,7 @@ ControlMap ControlMapping::convertCommand(const SDL_Event& event, bool fromPad) 
         if (event.key.keysym.sym == getControl("KEY_X")) return CMD_X;
         if (event.key.keysym.sym == getControl("KEY_Y")) return CMD_Y;
         if (event.key.keysym.sym == getControl("KEY_SELECT")) return CMD_OPTIONS;
-        
-        // keyboard fallbacks (macOS only, device uses evdev)
+        // keyboard fallbacks, macOS only
         if (event.key.keysym.sym == 27) return B_CMD;           // Escape / virtual-pad B
         if (event.key.keysym.sym == 8) return B_CMD;            // Backspace = back
         if (event.key.keysym.sym == 13) return A_CMD;           // Return / virtual-pad A
@@ -112,7 +113,7 @@ ControlMap ControlMapping::convertCommand(const SDL_Event& event, bool fromPad) 
         if (event.key.keysym.sym == 275) return CMD_RIGHT;
         if (event.key.keysym.sym == 276) return CMD_LEFT;
         if (event.key.keysym.sym == 9)  return CMD_SYS_SETTINGS; // Tab = Start (settings)
-        
+
     }
     if (event.type == SDL_JOYBUTTONDOWN) {
         if (event.jbutton.button == getControl("BTN_A")) return A_CMD;
@@ -161,23 +162,23 @@ ControlMap ControlMapping::convertCommand(const SDL_Event& event, bool fromPad) 
             logMessage(INFO,"SDL_JOYHATMOTION","UP");
             return CMD_UP;
         }
-            
+
         if (event.jhat.value == SDL_HAT_DOWN) {
             logMessage(INFO,"SDL_JOYHATMOTION","DOWN");
             return CMD_DOWN;
         }
-        if (event.jhat.value == SDL_HAT_RIGHT) 
+        if (event.jhat.value == SDL_HAT_RIGHT)
         {
             logMessage(INFO,"SDL_JOYHATMOTION","RIGHT");
             return CMD_RIGHT;
         }
-            
-        if (event.jhat.value == SDL_HAT_LEFT) 
+
+        if (event.jhat.value == SDL_HAT_LEFT)
         {
             logMessage(INFO,"SDL_JOYHATMOTION","LEFT");
             return CMD_LEFT;
-        }            
+        }
     }
 
-    return CMD_NONE; 
+    return CMD_NONE;
 }

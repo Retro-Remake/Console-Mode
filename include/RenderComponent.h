@@ -97,7 +97,6 @@ public:
 
     void setClock12(bool b) { m_clock12 = b; }
     bool clock12() const { return m_clock12; }
-
     // EXT strips the extension, REGION strips "(USA)"-style tags (games only)
     enum TitleFilter { TF_EXT, TF_REGION, TF_EXT_REGION };
     void setTitleFilter(const std::string& v) {
@@ -105,7 +104,6 @@ public:
                       : (v == "Ext. + Region") ? TF_EXT_REGION : TF_EXT;
     }
     virtual std::string applyTitleFilter(const std::string& name) const = 0;
-
     // ~88% of a 4:3 frame, clamped to the CRT safe area
     int menuBgWidth() const {
         int w = screenHeight * 4 * 88 / (3 * 100);
@@ -138,7 +136,6 @@ protected:
     TTF_Font* settingsFont = nullptr;
     TTF_Font* titleFont = nullptr;
     TTF_Font* gridTitleFont = nullptr;
-
     // optional CJK fallback loaded from SD, absent = tofu not a crash
     std::string m_cjkPath;
     bool m_cjkChecked = false;
@@ -222,12 +219,10 @@ protected:
     SDL_Surface* m_qrPatreon = nullptr;
     SDL_Surface* m_knifeIcon = nullptr;
 
-
     std::unordered_map<std::string, SDL_Surface*> textCache;
     std::vector<std::string> textCacheOrder;
     static const size_t TEXT_CACHE_MAX = 512;
     virtual SDL_Surface* cachedText(TTF_Font* f, const std::string& text, SDL_Color color) = 0;
-
 
     bool m_fullFrame = true;
     bool m_forceFull = true;
@@ -254,7 +249,6 @@ protected:
 
     int    m_prevMainSel    = -1;  size_t m_prevMainCount    = 0;
 
-
     virtual void drawAppSettingRow(const Settings::SettingRow& item, bool selected,
                            int startX, int rowY, int bgWidth, uint8_t vol, bool clearStrip) = 0;
 
@@ -271,29 +265,31 @@ protected:
     int listStart(int key) { return m_listPrev[key].scroll; }
 
     virtual void drawListScrollBar(int key, int baseY, int stepY, int itemsPerPage, int total) = 0;
-
-
+    // raw 0xRRGGBB fills leave alpha 0 on an alpha-channel surface
+    Uint32 mapRgbHex(Uint32 rgb) {
+        return SDL_MapRGB(screen->format, (Uint8)(rgb >> 16), (Uint8)(rgb >> 8), (Uint8)rgb);
+    }
 
     Uint32 bgFillColor() {
         Uint32 hex;
-        if (parseHexColor(bgcolor, hex)) return hex;
-        if (bgcolor == RED)    return 0xcf3a1f;
-        if (bgcolor == BLUE)   return 0x3d5f93;
-        if (bgcolor == GREEN)  return 0x2a988d;
-        if (bgcolor == YELLOW) return 0xd0a001;
-        if (bgcolor == GRAY)   return 0x4e4e4e;
+        if (parseHexColor(bgcolor, hex)) return mapRgbHex(hex);
+        if (bgcolor == RED)    return mapRgbHex(0xcf3a1f);
+        if (bgcolor == BLUE)   return mapRgbHex(0x3d5f93);
+        if (bgcolor == GREEN)  return mapRgbHex(0x2a988d);
+        if (bgcolor == YELLOW) return mapRgbHex(0xd0a001);
+        if (bgcolor == GRAY)   return mapRgbHex(0x4e4e4e);
         return SDL_MapRGB(screen->format, 0, 0, 0);
     }
 
     Uint32 selColor() {
         Uint32 hex;
-        if (parseHexColor(selcolor, hex)) return hex;
-        if (selcolor == RED)    return 0xff3030;
-        if (selcolor == BLUE)   return 0x33aaff;
-        if (selcolor == GREEN)  return 0x33ff66;
-        if (selcolor == YELLOW) return 0xffe000;
-        if (selcolor == GRAY)   return 0xc8c8c8;
-        return 0xFFFFFFFF;
+        if (parseHexColor(selcolor, hex)) return mapRgbHex(hex);
+        if (selcolor == RED)    return mapRgbHex(0xff3030);
+        if (selcolor == BLUE)   return mapRgbHex(0x33aaff);
+        if (selcolor == GREEN)  return mapRgbHex(0x33ff66);
+        if (selcolor == YELLOW) return mapRgbHex(0xffe000);
+        if (selcolor == GRAY)   return mapRgbHex(0xc8c8c8);
+        return SDL_MapRGB(screen->format, 0xFF, 0xFF, 0xFF);
     }
     std::string selcolor = WHITE;
     float m_ss4Aspect = 0.72f;
@@ -338,10 +334,10 @@ public:
     size_t thumbCacheSize() const      { return thumbCache.size(); }
     size_t textCacheSize() const       { return textCache.size(); }
 
-
-
+    virtual void onFullRedraw() {}
     void forceFullRedraw() {
         m_forceFull = true;
+        onFullRedraw();
 
         m_gridCells.clear();
         m_gridSelKey.clear();
@@ -401,21 +397,7 @@ protected:
         m_fullFrame = true;
         m_damage.clear();
 
-        Uint32 hex;
-        if (parseHexColor(bgcolor, hex))
-            SDL_FillRect(screen, nullptr, hex);
-        else if (bgcolor == RED)
-            SDL_FillRect(screen, nullptr, 0xcf3a1f);
-        else if (bgcolor == BLUE)
-            SDL_FillRect(screen, nullptr, 0x3d5f93);
-        else if (bgcolor == GREEN)
-            SDL_FillRect(screen, nullptr, 0x2a988d);
-        else if (bgcolor == YELLOW)
-            SDL_FillRect(screen, nullptr, 0xd0a001);
-        else if (bgcolor == GRAY)
-            SDL_FillRect(screen, nullptr, 0x4e4e4e);
-        else
-            SDL_FillRect(screen, nullptr, SDL_MapRGB(screen->format, 0, 0, 0));
+        SDL_FillRect(screen, nullptr, bgFillColor());
         struct timespec _c1; clock_gettime(CLOCK_MONOTONIC, &_c1);
         m_clearUsSum += (_c1.tv_sec - _c0.tv_sec) * 1000000L + (_c1.tv_nsec - _c0.tv_nsec) / 1000;
         m_clearCount++;
@@ -425,7 +407,6 @@ public:
 
     RenderComponent(Configuration& cfg, ILayout& theme);
     virtual ~RenderComponent();
-
 
     void resetValues() {
         selectTime = SDL_GetTicks();
@@ -513,7 +494,6 @@ public:
         bool explicitRes = (!res.empty() && res != "Default"
                             && sscanf(res.c_str(), "%dx%d", &wantW, &wantH) == 2
                             && wantW > 0 && wantH > 0);
-
         // 1440p/1536p need presets 14/13, plain vmode -r is over the scaler Fmax
         if      (res == "2560x1440") customVmode = "vmode 14";
         else if (res == "2048x1536") customVmode = "vmode 13";
@@ -595,9 +575,10 @@ public:
             SDL_Quit();
             exit(EXIT_CONSOLE_QUIT);
         }
+        // present must replace, never blend
+        SDL_SetAlpha(screen, 0, SDL_ALPHA_OPAQUE);
 
         crt::init();
-
         // TATE 1=CW 2=CCW: draw into a portrait surface, rotate-blit to landscape fb0 in update()
         m_rotation = crt::rotation();
 #if defined(MACOS) || defined(X86)
@@ -616,7 +597,6 @@ public:
                 m_rotation = 0;
             }
         }
-
         // push from the SDL shadow when there is one, the fb mmap reads back uncached
         {
             SDL_Surface* fbs = m_fbScreen ? m_fbScreen : screen;
@@ -680,29 +660,12 @@ public:
         }
     }
 
-
     virtual void drawCommonInfo(std::string pageInfo = "", std::string folderName = "", MenuLevel menu = MENU_NONE, bool footerOnly = false) = 0;
 
-
-
-
-
-    bool   m_netUp = false;
+    bool   m_netUp = false;   // wlan has an IPv4 address
+    bool   m_ethUp = false;   // eth has an IPv4 address
     bool   m_btUp  = false;
     Uint32 m_netCheckMs = 0;
-
-
-
-
-
-
-
-
-
-
-
-
-
 
     bool searchActive() const { return m_searchActive; }
     const std::string& searchQuery() const { return m_searchQuery; }
@@ -710,23 +673,10 @@ public:
     bool textInputActive() const { return m_textActive; }
     const std::string& textInputValue() const { return m_searchQuery; }
 
-
-
     void drawRomList(const std::string& folderName, const std::vector<std::pair<std::string, std::string>>& romData, int currentRomIndex,
                      MenuLevel menu = MENU_ROM, bool useAlias = true, bool exactArt = false);
 
-
     void drawAppSettings(const std::string& settingsTitle, const std::vector<Settings::SettingRow>& settingList, int currentSettingIndex, uint8_t vol);
-
-
-
-
-
-
-
-
-
-
 
     virtual void requestThumbnail(const std::string& romPath, bool exact = false) = 0;
 
@@ -777,17 +727,9 @@ public:
 
     void setSelColor(const std::string& color) { selcolor = color; }
 
-
-
-
-
-
-
-
 protected:
     float m_cdVis[32] = {};
     int  m_cdPrevSel = -1, m_cdPrevPlay = -1, m_cdPrevElapsed = -1;
     bool m_cdPrevPaused = false;
     size_t m_cdPrevN = 0;
 };
-

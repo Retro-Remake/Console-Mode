@@ -19,7 +19,6 @@ enum ConsoleModeExitCode {
 
 #include <cctype>
 #include <algorithm>
-
 // natural case-insensitive sort, strips a trailing extension first
 static inline std::string romSortKey(const std::string& name) {
     size_t dot = name.find_last_of('.');
@@ -71,7 +70,6 @@ struct BluetoothDevice {
         battery = -1;
     }
 };
-
 // one WiFi menu row parsed from wifi.sh scan output
 struct WifiNetwork {
     std::string ssid;   // raw bytes, for display
@@ -98,7 +96,6 @@ public:
     Rom(const std::string& name, const std::string& path, std::string launcher = "", bool isFolder=false)
         : name(name), path(path),isFolder(isFolder),launcher(launcher) {isCue = false;}
 
-    // defer building children until the folder is first opened
     void setLazy(const std::vector<std::string>& exts) { lazy = true; isFolder = true; lazyExts = exts; }
     bool isLazy() const { return lazy; }
     const std::vector<std::string>& getLazyExts() const { return lazyExts; }
@@ -252,6 +249,14 @@ public:
 
     std::string getGroupname() const {
         return groupname;
+    }
+    // a lowercase "console.ini" still reads as "Console"
+    std::string displayName() const {
+        std::string s = std::filesystem::path(name).stem().string();
+        bool anyUpper = false;
+        for (unsigned char c : s) if (std::isupper(c)) { anyUpper = true; break; }
+        if (!anyUpper && !s.empty()) s[0] = (char)std::toupper((unsigned char)s[0]);
+        return s;
     }
 
     Folder* getFolderByName(const std::string& name) {

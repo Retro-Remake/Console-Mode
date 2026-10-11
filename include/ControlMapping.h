@@ -15,10 +15,10 @@ enum ControlMap {
     CMD_RIGHT,
     CMD_ENTER,
     CMD_BACK,
-    CMD_X,        
+    CMD_X,
     CMD_Y,
     CMD_OPTIONS,
-    CMD_SYS_SETTINGS,    
+    CMD_SYS_SETTINGS,
     CMD_NONE
 };
 
@@ -31,10 +31,8 @@ public:
     ControlMapping(Configuration& cfg);
 
     int getControl(const std::string& controlName) const;
-
-    // fromPad: the event came from a gamepad, only those obey A/B swap
+    // only pad events obey A/B swap
     ControlMap convertCommand(const SDL_Event& event, bool fromPad = false);
     // role: 0 A, 1 B, 2 X, 3 Y
-    ControlMap padFaceCommand(int role) const;
+    ControlMap padFaceCommand(int role, const std::string& vidPid = std::string()) const;   // vidPid: per-pad A/B override
 };
-

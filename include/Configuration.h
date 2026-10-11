@@ -14,7 +14,6 @@
 #include "State.h"
 #include "utils.h"
 
-
 #define BLACK       "Black"
 #define RED         "Red"
 #define BLUE        "Blue"
@@ -22,7 +21,6 @@
 #define YELLOW      "Yellow"
 #define GRAY        "Gray"
 #define WHITE       "White"
-
 
 struct ConsoleData {
     std::string name;
@@ -42,11 +40,9 @@ private:
 
     boost::property_tree::ptree gameListPt;
 
-    // saved as the device /media/fat paths, not the mac-remapped runtime ones
     std::map<std::string, std::string> m_macOrigPaths;
 
 public:
-
     // config.ini
     static const std::string GLOBAL;
     static const std::string APPLICATION;
@@ -72,6 +68,9 @@ public:
     static const std::string GAME_STYLE;
     static const std::string BUTTON_STYLE;
     static const std::string CLOCK_FORMAT;
+    static const std::string ICON_SET;         // "Dark" / "Default" category tiles
+    static const std::string TIMEZONE;         // IANA zone name, or TIMEZONE_DEFAULT
+    static constexpr const char* TIMEZONE_DEFAULT = "System Default";
     static const std::string BOOT_TO_GAMES;
     static const std::string HIDE_SECTIONS;
     static const std::string HIDDEN_SECTIONS;  // comma list
@@ -81,7 +80,7 @@ public:
     static const std::string HISTORY_SIZE;
     static const std::string SHOW_FPS;
     static const std::string SS4_ANIM;
-    static const std::string USE_MIRROR;   // self-update via codeload mirror
+    static const std::string USE_MIRROR;
 
     static const std::string NET;
     static const std::string LOADCONFIG;
@@ -122,6 +121,7 @@ public:
     static const std::string IMPORT_GAMELIST;
     static const std::string MANAGE_HIDDEN;
     static const std::string SHOW_HOMEBREW;
+    static const std::string SHOW_MUSIC;
 #ifdef HAS_PS1
     static const std::string PS1_FAST;
     static const std::string DISC_OPTIONS;
@@ -134,6 +134,7 @@ public:
     static const std::string TITLE_FILTER;
     static const std::string LOCK_FLIX_TITLE;
     static const std::string CENTER_LIST;
+    static const std::string ROUND_SEL;
     static const std::string SHOW_RESUME;
     static const std::string BOOT_SPEED;     // "Unsafe" / "Safe" / "Safest"
     static const std::string PERF_MODE;      // "Off" / "Text Only"
@@ -148,7 +149,6 @@ public:
     static const std::string CORE_OVERRIDE;
 
     static const std::string GLOBAL_VOLUME;
-
     // theme.ini
     static const std::string SEL_ITEM_FONT_COLOR;
     static const std::string ITEMS_FONT_COLOR;
@@ -187,9 +187,8 @@ public:
     static const std::string FAVORITES;
     static const std::string HIDDEN;
 
-
     Configuration(const std::string& configIniFilepath,
-                  const std::string& gamelistpath, 
+                  const std::string& gamelistpath,
                   const std::string& stateFilepath);
 
     void set(const std::string& id, const std::string& value);
@@ -198,7 +197,7 @@ public:
     bool getBool(const std::string& id) const;
     int getInt(const std::string& id) const;
 
-    std::set<std::string> getList(const std::string& id, 
+    std::set<std::string> getList(const std::string& id,
                                   const char delimiter = ',') const;
     std::map<std::string, ConsoleData> parseIniFile(const std::string& iniPath);
 

@@ -19,7 +19,7 @@
 class Configuration;
 
 class Settings : public ISettingsSubject {
-public: 
+public:
     struct Setting {
         std::string key;
         std::string value;
@@ -39,7 +39,7 @@ public:
 
 private:
     std::vector<ISettingsObserver *> observers;
-    
+
 protected:
     int currentIndex;
 
@@ -48,6 +48,8 @@ protected:
     std::vector<std::string> gameStyles;
     std::vector<std::string> buttonStyles;
     std::vector<std::string> clockFormats;
+    std::vector<std::string> iconSets;
+    std::vector<std::string> bootTargets;
     std::vector<std::string> btReconnectModes;
     std::vector<std::string> btRepairModes;
     std::vector<std::string> crtFonts;     // CRT-only
@@ -64,15 +66,13 @@ protected:
     int maxValue;
     int delta;
 
-    void updateInt(bool increase, std::string setting, 
+    void updateInt(bool increase, std::string setting,
                    int min, int max, int inc);
-    
 
     std::set<std::string> cores;
 
     std::vector<std::string> getEnabledKeys();
 
-    // "MiSTer INI Resolution" row: reads/edits the active ini's video_mode, applied on reboot
     std::string parseMisterIniVideoMode();
     void        updateMisterIniVideoMode(bool increase);
     void        updateMisterIniHdr(bool increase);
@@ -85,7 +85,6 @@ public:
     bool        applyMisterIniHdr();
     std::string parseMisterIniScandoubler();
 
-    // RetroAchievements: toggle a per-core "main=<binary>" chain-load override in the active ini
     std::string activeMisterIniPath();
     bool        misterIniMainOverrideEnabled(const std::string& coreName, const std::string& mainName);
     bool        setMisterIniMainOverride(const std::string& coreName, const std::string& mainName, bool enable);
@@ -105,7 +104,7 @@ public:
 
     std::string currentKey;
     std::string currentValue;
-    
+
 public:
 
     void updateString(std::string key, std::string value);
@@ -125,13 +124,11 @@ public:
     std::string getCurrentKey();
     std::string getCurrentValue();
     int settingCount() const { return (int)enabledKeys.size(); }
-
-    // display-only value for action rows, never persisted
+    // never persisted
     void setTransientValue(const std::string& key, const std::string& v) {
         if (settingsMap.count(key)) settingsMap[key].value = v;
     }
 
-    // restrict the visible rows to a group's enabled keys and reset selection to the top
     void setVisibleGroup(const std::vector<std::string>& groupKeys) {
         enabledKeys.clear();
         for (const auto& k : groupKeys)
@@ -140,7 +137,6 @@ public:
         currentKey   = enabledKeys.empty() ? std::string() : enabledKeys[0];
         currentValue = settingsMap.count(currentKey) ? settingsMap[currentKey].value : std::string();
     }
-
 
     void attach(ISettingsObserver *observer) override;
     void detach(ISettingsObserver *observer) override;
@@ -151,19 +147,19 @@ public:
 class AppSettings : public Settings {
 public:
 
-    AppSettings(Configuration& cfg, Languages& languages, 
+    AppSettings(Configuration& cfg, Languages& languages,
                    int minValue, int maxValue, int delta);
 
     std::vector<Settings::SettingRow> getAppSettings();
 
     int getConfigIndex();
-    
+
     void reloadSettingRows();
 
     void navigateUp() { Settings::navigateUp(); };
     void navigateDown() { Settings::navigateDown();};
     void navigateLeft() override {
-        
+
         if (settingsMap[currentKey].enabled) {
             if (currentKey == Configuration::BG_COLOR){
                 updateBgColor(false);
@@ -184,13 +180,15 @@ public:
             } else if (currentKey == Configuration::PROMPT_SWAP){
                 updateBoolSetting();
             } else if (currentKey == Configuration::BOOT_TO_GAMES){
-                updateBoolSetting();
+                updateBootTo(false);
             } else if (currentKey == Configuration::GAME_STYLE) {
                 updateGameStyle(false);
             } else if (currentKey == Configuration::BUTTON_STYLE) {
                 updateButtonStyle(false);
             } else if (currentKey == Configuration::CLOCK_FORMAT) {
                 updateClockFormat(false);
+            } else if (currentKey == Configuration::ICON_SET) {
+                updateIconSet(false);
             } else if (currentKey == Configuration::BT_RECONNECT) {
                 updateBtReconnect(false);
             } else if (currentKey == Configuration::BT_REPAIR) {
@@ -227,12 +225,14 @@ public:
                 updateBoolSetting();
             } else if (currentKey == Configuration::BGM_MODE) {
                 updateBgmMode(true);
+            } else if (currentKey == Configuration::AB_SWAP) {
+                updateBoolSetting();
             } else if (currentKey == Configuration::XY_SWAP) {
                 updateBoolSetting();
             } else if (currentKey == Configuration::PROMPT_SWAP) {
                 updateBoolSetting();
             } else if (currentKey == Configuration::BOOT_TO_GAMES) {
-                updateBoolSetting();
+                updateBootTo(true);
             } else if (currentKey == Configuration::BG_ART) {
                 updateBoolSetting();
             } else if (currentKey == Configuration::GAME_STYLE) {
@@ -241,6 +241,8 @@ public:
                 updateButtonStyle(true);
             } else if (currentKey == Configuration::CLOCK_FORMAT) {
                 updateClockFormat(true);
+            } else if (currentKey == Configuration::ICON_SET) {
+                updateIconSet(true);
             } else if (currentKey == Configuration::BT_RECONNECT) {
                 updateBtReconnect(true);
             } else if (currentKey == Configuration::BT_REPAIR) {
@@ -263,7 +265,6 @@ public:
         notifySettingsChange(currentKey, currentValue);
     }
 
-
     void navigateEnter() override {
         if (settingsMap[currentKey].enabled) {
             if (currentKey == Configuration::QUIT)
@@ -271,26 +272,25 @@ public:
             else if (currentKey == Configuration::UPDATE_TIME)
                 updateTime();
             else if (currentKey == Configuration::SCREEN_RES) {
-                // restart-applied: persist the pick and re-exec
+
                 cfg.set(Configuration::SCREEN_RES, settingsMap[Configuration::SCREEN_RES].value);
                 cfg.saveConfigIni();
                 restartConsoleMode();   // does not return on success
             }
         }
     }
-    
+
     void updateTime();
-    
-    
+
     void updateConfigIni(bool increase);
 
     void updateUSBMode(bool increase);
-    
+
     void updateOverclock(bool increase);
-    
+
     void restartApplication();
     void quitApplication();
-    
+
     void updateBgColor(bool increase);
     void updateSelColor(bool increase);
     void updateGameStyle(bool increase);
@@ -298,6 +298,8 @@ public:
     void updateBgmMode(bool increase);
     void updateButtonStyle(bool increase);
     void updateClockFormat(bool increase);
+    void updateIconSet(bool increase);
+    void updateBootTo(bool increase);
     void updateBtReconnect(bool increase);
     void updateBtRepair(bool increase);
     void updateResolution(bool increase);
@@ -307,11 +309,10 @@ public:
     std::string getName() override;
 };
 
-
 class DevSettings : public Settings {
 public:
 
-    DevSettings(Configuration& cfg, Languages& languages, 
+    DevSettings(Configuration& cfg, Languages& languages,
                    int minValue, int maxValue, int delta);
 
     std::vector<Settings::SettingRow> getDevSettings();
@@ -319,13 +320,13 @@ public:
     int getDevToolSize();
 
     int getConfigIndex();
-    
+
     void reloadSettingRows();
 
     void navigateUp() { Settings::navigateUp(); };
     void navigateDown() { Settings::navigateDown();};
     void navigateLeft() override {
-        if (settingsMap[currentKey].enabled) {            
+        if (settingsMap[currentKey].enabled) {
             if (currentKey == Configuration::SCREEN_REFRESH) {
                 updateInt(false, currentKey, minValue + delta, maxValue, delta);
             } else if (currentKey == Configuration::HISTORY_SIZE) {
@@ -341,6 +342,8 @@ public:
 #endif
             }else if (currentKey == Configuration::SHOW_HOMEBREW) {
                 updateBoolSetting();
+            }else if (currentKey == Configuration::SHOW_MUSIC) {
+                updateBoolSetting();
             }else if (currentKey == Configuration::AUTOBOOT) {
                 updateAutoboot();
             }else if (currentKey == Configuration::BOOT_MAIN_MENU) {
@@ -352,6 +355,8 @@ public:
             }else if (currentKey == Configuration::PERF_MODE) {
                 updatePerfMode(false);
             }else if (currentKey == Configuration::CENTER_LIST) {
+                updateBoolSetting();
+            }else if (currentKey == Configuration::ROUND_SEL) {
                 updateBoolSetting();
             }else if (currentKey == Configuration::LOCK_FLIX_TITLE) {
                 updateBoolSetting();
@@ -384,6 +389,8 @@ public:
 #endif
             }else if (currentKey == Configuration::SHOW_HOMEBREW) {
                 updateBoolSetting();
+            }else if (currentKey == Configuration::SHOW_MUSIC) {
+                updateBoolSetting();
             }else if (currentKey == Configuration::AUTOBOOT) {
                 updateAutoboot();
             }else if (currentKey == Configuration::BOOT_MAIN_MENU) {
@@ -395,6 +402,8 @@ public:
             }else if (currentKey == Configuration::PERF_MODE) {
                 updatePerfMode(true);
             }else if (currentKey == Configuration::CENTER_LIST) {
+                updateBoolSetting();
+            }else if (currentKey == Configuration::ROUND_SEL) {
                 updateBoolSetting();
             }else if (currentKey == Configuration::LOCK_FLIX_TITLE) {
                 updateBoolSetting();
@@ -408,7 +417,6 @@ public:
         }
         notifySettingsChange(currentKey, currentValue);
     }
-
 
     void navigateEnter() override {
     }
@@ -430,11 +438,9 @@ public:
     std::string getName() override;
 };
 
-
-
 class RomSettings : public Settings, public ILanguageObserver {
 public:
-    RomSettings(Configuration& cfg, Languages& languages, 
+    RomSettings(Configuration& cfg, Languages& languages,
                 int minValue, int maxValue, int delta);
 
     std::vector<Settings::SettingRow> getRomSettings();
@@ -454,12 +460,12 @@ public:
             if (currentKey == Configuration::CORE_OVERRIDE) {
                 updateCoreOverride(false);
             } else if (currentKey == Configuration::ROM_OVERCLOCK) {
-                updateRomOverclock(false); 
+                updateRomOverclock(false);
             } else if (currentKey == Configuration::ROM_AUTOSTART) {
-                updateAutoStart(false);            
+                updateAutoStart(false);
             } else if (currentKey == Configuration::CORE_SELECTION) {
                 updateCoreSelection(false);
-            }  
+            }
         }
         notifySettingsChange(currentKey, currentValue);
     }
@@ -469,13 +475,13 @@ public:
             if (currentKey == Configuration::CORE_OVERRIDE) {
                 updateCoreOverride(true);
             } else if (currentKey == Configuration::ROM_OVERCLOCK) {
-                updateRomOverclock(true); 
+                updateRomOverclock(true);
             } else if (currentKey == Configuration::ROM_AUTOSTART) {
-                updateAutoStart(true);         
+                updateAutoStart(true);
             } else if (currentKey == Configuration::CORE_SELECTION) {
                 updateCoreSelection(true);
 
-            }     
+            }
         }
         notifySettingsChange(currentKey, currentValue);
     }
@@ -499,12 +505,9 @@ public:
                 }
             }
         }
-
         // TODO: per-rom core/launcher override
         std::string currentCore = *cores.begin();
         settingsMap[Configuration::CORE_OVERRIDE] = {Configuration::CORE_OVERRIDE, currentCore, true};
         notifySettingsChange(Configuration::CORE_OVERRIDE, currentCore);
     }
 };
-
-

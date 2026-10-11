@@ -147,6 +147,14 @@ void Application::drawCurrentState() {
             std::string title = "Search \"" + m_searchResultsQuery + "\"";
             renderComponent.setFavHint(!m_searchFromRbf);
 
+            std::set<std::string> favLaunch, favCells;
+            for (auto& f : vecFavoritesFile) favLaunch.insert(f.getPath());
+            for (auto& r : m_searchResults) {
+                std::string lp = resolveLaunchPathForRom(r);
+                if (!lp.empty() && favLaunch.count(lp)) favCells.insert(r.getPath());
+            }
+            renderComponent.setFavoritePaths(std::move(favCells));
+
             RenderComponent::GameStyle gs = m_searchFromRbf ? RenderComponent::GS_LIST
                                                             : renderComponent.gameStyle();
             if (gs == RenderComponent::GS_GRID)
@@ -238,12 +246,8 @@ void Application::drawCurrentState() {
             RenderComponent::GameStyle gs = renderComponent.gameStyle();
             std::vector<std::pair<std::string,std::string>> cells;
             for (Section& section : sections) {
-                std::string g = section.getGroupname();
-                std::string disp = lowerCopy(g), low = lowerCopy(g);
-                if (!disp.empty()) disp[0] = toupper(disp[0]);
-                std::string iconPath = cfg.get(Configuration::HOME_PATH)
-                    + "ConsoleMode/themeconfig/section_groups/" + low + "1.png";
-                cells.push_back({disp, iconPath});
+                cells.push_back({section.displayName(),
+                                 sectionGroupIcon(cfg, lowerCopy(section.getGroupname()))});
             }
 
             {
@@ -318,6 +322,10 @@ void Application::drawCurrentState() {
                     (g_scrapeSource == SCRAPE_SRC_TGDB ? "TheGamesDB"
                      : g_scrapeSource == SCRAPE_SRC_SS  ? "ScreenScraper"
                                                         : "Default (libretro)"));
+                actionRows.push_back(std::string("Media:  ") +
+                    (g_scrapeMedia == SCRAPE_MEDIA_BOX ? "Box Art only"
+                     : g_scrapeMedia == SCRAPE_MEDIA_BG ? "Backgrounds only"
+                                                        : "Box Art + Backgrounds"));
                 actionRows.push_back(std::string("Force re-scrape:  ") +
                     (g_scrapeForce ? "On (overwrite existing)" : "Off (skip games with art)"));
             }
@@ -328,6 +336,13 @@ void Application::drawCurrentState() {
             actionRows.push_back(allRow);
             actionRows.push_back("> Start (" + std::to_string(checked) + " selected)");
             renderComponent.drawCheckList(title, actionRows, items, g_scrapeCursor);
+            break;
+        }
+        case MENU_FAV_FOLDER:
+        {
+            if (m_favFolderIdx < 0 || m_favFolderIdx >= (int)m_favFolderCells.size())
+                m_favFolderIdx = 0;
+            drawStyledCells("Favorites / " + m_favFolderTitle, m_favFolderCells, m_favFolderIdx, MENU_FAV_FOLDER);
             break;
         }
         case MENU_HIDE_SECTIONS:
@@ -374,6 +389,7 @@ void Application::drawCurrentState() {
             bool done = processOptimizeBatch();
             if (done) {
                 renderComponent.invalidateArtCache();
+                bgmResume(cfg);
                 state.currentMenuLevel = APP_SETTINGS;
                 renderComponent.forceFullRedraw();
                 SetTip("Optimized " + std::to_string(g_optOk - g_optSkipped) + " of "
@@ -431,9 +447,7 @@ void Application::drawCurrentState() {
             for (Folder& folder : folders)
                 cells.push_back({systemDisplayName(folder.getTitle()), systemLogoPath(folder, isList)});
 
-            std::string sectionName = section.getTitle();
-            sectionName =  sectionName.substr(0, sectionName.size() - 4);
-            sectionName = "Load Game / "+sectionName;
+            std::string sectionName = "Load Game / " + section.displayName();
             if (gs == RenderComponent::GS_FLIX)
                 renderComponent.drawFlix(sectionName, cells, state.currentFolderIndex, MENU_FOLDER);
             else if (gs == RenderComponent::GS_SS4)
@@ -485,7 +499,6 @@ void Application::drawCurrentState() {
             std::set<std::string> favLaunch, favParents;
             for (auto& f : vecFavoritesFile) {
                 favLaunch.insert(f.getPath());
-
                 // lazy folders can't resolve a launch path yet so match by parent dir
                 const std::string& p = f.getPath();
                 size_t s = p.find_last_of('/');
@@ -501,7 +514,8 @@ void Application::drawCurrentState() {
                     romData.push_back({title, rom.getPath()});
                     if (!favLaunch.empty()) {
                         std::string lp = resolveLaunchPathForRom(rom);
-                        if (!lp.empty() && favLaunch.count(lp)) favCells.insert(rom.getPath());
+                        if (favLaunch.count(rom.getPath())) favCells.insert(rom.getPath());   // folder favorite
+                        else if (!lp.empty() && favLaunch.count(lp)) favCells.insert(rom.getPath());
                         else if (rom.IsFolder() && rom.isLazy() && favParents.count(rom.getPath()))
                             favCells.insert(rom.getPath());
                     }
@@ -678,6 +692,39 @@ void Application::drawCurrentState() {
             renderComponent.drawScriptList(vecScriptList,currentScriptIndex);
             break;
         }
+        case MENU_MUSIC_NOWPLAYING:
+        case MENU_MUSIC_LIB:
+        case MENU_MUSIC_SETTINGS:
+        case MENU_MUSIC_PLAYER:
+        case MENU_MUSIC:
+            drawMusicState(state.currentMenuLevel);
+            break;
+        case MENU_TIMEZONE:
+        {
+            std::vector<Settings::SettingRow> rows;
+            const std::string cur = cfg.get(Configuration::TIMEZONE);
+            int curIdx = 0;
+            if (g_tzRegion.empty()) {
+                rows.push_back({Configuration::TIMEZONE_DEFAULT, tzIsDefault(cur) ? "Active" : ""});
+                for (size_t i = 0; i < g_tzEntries.size(); i++) {
+                    bool in = cur.rfind(g_tzEntries[i] + "/", 0) == 0;
+                    if (in) curIdx = (int)i + 1;
+                    rows.push_back({g_tzEntries[i], in ? "Selected" : ""});
+                }
+            } else {
+                rows.push_back({"..", ""});
+                for (size_t i = 0; i < g_tzEntries.size(); i++) {
+                    bool sel = (g_tzRegion + "/" + g_tzEntries[i]) == cur;
+                    if (sel) curIdx = (int)i + 1;
+                    rows.push_back({g_tzEntries[i], sel ? "Selected" : ""});
+                }
+            }
+            renderComponent.drawDevToolsSettings(
+                g_tzRegion.empty() ? "System / Time Zone"
+                                   : "System / Time Zone / " + g_tzRegion,
+                rows, g_tzIdx, curIdx);
+            break;
+        }
         case MENU_BGM:
         {
             std::vector<Settings::SettingRow> rows;
@@ -699,16 +746,8 @@ void Application::drawCurrentState() {
             break;
         }
         case MENU_CD_TESTER:
-        {
-            std::vector<std::pair<std::string,int>> rows;
-            for (int i = 0; i < (int)cdtest::items().size(); i++)
-                rows.push_back({cdtest::items()[i].label, cdtest::durationSec(i)});
-            int cur = cdtest::currentIndex();
-            renderComponent.drawCdTester(rows, m_cdIdx, cur, cdtest::paused(),
-                                         cdtest::elapsedSec(),
-                                         cur >= 0 ? cdtest::durationSec(cur) : 0);
+            drawCdState();
             break;
-        }
         case MENU_CONTROLS:
         {
             renderComponent.drawCtrols(currentControlIndex);
@@ -770,7 +809,6 @@ void Application::drawCurrentState() {
         case MENU_BLUETOOTH:
         {
             readBlueBoothLog();
-
             // bt_pair.sh writes this status, "idle" means hide it
             static std::string s_pairMsg;
             static Uint32 s_pairReadAt = 0;
@@ -870,7 +908,6 @@ static void onQuitSignal(int) { g_quitSignal = 1; }
 
 void Application::handleCommand(ControlMap cmd) {
     m_dirty = true;
-
     // CRT 180deg flips the whole frame so invert the d-pad to match the tube
     if (crt::rotation() == 3) {
         switch (cmd) {
@@ -923,7 +960,6 @@ void Application::handleCommand(ControlMap cmd) {
         }
         return;
     }
-
     // gate the settings dispatch on the entry level so a transition cmd isn't also run as nav
     MenuLevel entryLevel = state.currentMenuLevel;
     int entrySettingsGroup = g_settingsGroupIdx;
@@ -1052,6 +1088,46 @@ void Application::handleCommand(ControlMap cmd) {
             }
             break;
 
+        case MenuLevel::MENU_FAV_FOLDER:
+        {
+            int n = (int)m_favFolderRoms.size();
+            if (cmd == CMD_UP || cmd == CMD_DOWN || cmd == CMD_LEFT || cmd == CMD_RIGHT) {
+                m_favFolderIdx = styleMoveIndex(cmd, m_favFolderIdx, n, renderComponent.gameStyle(),
+                    theme.getIntValue(Configuration::ITEMS), renderComponent.gridCols());
+            } else if (cmd == CMD_ENTER && n > 0 && m_favFolderIdx >= 0 && m_favFolderIdx < n) {
+                Rom& r = m_favFolderRoms[m_favFolderIdx];
+                ensureRomExpanded(r);
+                if (r.IsFolder() && !r.IsCue()) {
+                    std::vector<Rom> children = r.getRoms();
+                    if (children.empty()) { SetTip("No games found in this folder."); }
+                    else {
+                        m_favFolderStack.push_back({ std::move(m_favFolderRoms), m_favFolderIdx });
+                        m_favFolderRoms = std::move(children);
+                        m_favFolderIdx = 0;
+                        favFolderRebuildCells();
+                        renderComponent.resetValues();
+                    }
+                } else {
+                    std::string path = resolveLaunchPathForRom(r);
+                    if (!path.empty()) {
+                        launchRomWithPath(path, true);
+                        renderComponent.resetValues();
+                    }
+                }
+            } else if (cmd == CMD_BACK) {
+                if (!m_favFolderStack.empty()) {
+                    m_favFolderIdx  = m_favFolderStack.back().second;
+                    m_favFolderRoms = std::move(m_favFolderStack.back().first);
+                    m_favFolderStack.pop_back();
+                    favFolderRebuildCells();
+                    renderComponent.resetValues();
+                } else {
+                    state.currentMenuLevel = MenuLevel::MENU_FAVORITES;
+                    renderComponent.resetValues();
+                }
+            }
+            break;
+        }
         case MenuLevel::MENU_FAVORITES:
 
             if (state.currentFavoritesIndex < 0) state.currentFavoritesIndex = 0;
@@ -1059,7 +1135,14 @@ void Application::handleCommand(ControlMap cmd) {
                 state.currentFavoritesIndex = vecFavoritesFile.empty() ? 0 : (int)vecFavoritesFile.size()-1;
             if (cmd == CMD_ENTER) {
                 if (vecFavoritesFile.size()>0){
-                    std::string path = vecFavoritesFile[state.currentFavoritesIndex].getPath();
+                    const Rom& fav = vecFavoritesFile[state.currentFavoritesIndex];
+                    std::error_code favEc;
+                    if (fav.IsFolder() || std::filesystem::is_directory(fav.getPath(), favEc)) {
+                        openFavoriteFolder(fav);
+                        renderComponent.resetValues();
+                        break;
+                    }
+                    std::string path = fav.getPath();
                     launchRomWithPath(path);
                     renderComponent.resetValues();
                 }
@@ -1258,16 +1341,24 @@ void Application::handleCommand(ControlMap cmd) {
 
             bool online      = (g_scrapeMode == SCRAPE_LIBRETRO);
             int  idxSource   = online ? 0 : -1;
-            int  idxForce    = online ? 1 : -1;
-            int  idxAll      = online ? 2 : 0;
-            int  idxStart    = online ? 3 : 1;
+            int  idxMedia    = online ? 1 : -1;
+            int  idxForce    = online ? 2 : -1;
+            int  idxAll      = online ? 3 : 0;
+            int  idxStart    = online ? 4 : 1;
             int  special     = idxStart + 1;
             int  sys         = (int)g_scrapeSystems.size();
             int  N           = special + sys;
             auto toggleSource = [&]() {
                 g_scrapeSource = (g_scrapeSource == SCRAPE_SRC_LIBRETRO) ? SCRAPE_SRC_TGDB
+                               : (g_scrapeSource == SCRAPE_SRC_TGDB)     ? SCRAPE_SRC_SS
                                                                         : SCRAPE_SRC_LIBRETRO;
                 buildScrapeSystems();
+                renderComponent.forceFullRedraw();
+            };
+            auto toggleMedia = [&]() {
+                g_scrapeMedia = (g_scrapeMedia == SCRAPE_MEDIA_BOTH) ? SCRAPE_MEDIA_BOX
+                              : (g_scrapeMedia == SCRAPE_MEDIA_BOX)  ? SCRAPE_MEDIA_BG
+                                                                     : SCRAPE_MEDIA_BOTH;
                 renderComponent.forceFullRedraw();
             };
             auto toggleAll = [&]() {
@@ -1284,10 +1375,12 @@ void Application::handleCommand(ControlMap cmd) {
                 renderComponent.forceFullRedraw();
             } else if (cmd == CMD_LEFT || cmd == CMD_RIGHT) {
                 if (g_scrapeCursor == idxSource)      toggleSource();
+                else if (g_scrapeCursor == idxMedia)   toggleMedia();
                 else if (g_scrapeCursor == idxForce) { g_scrapeForce = !g_scrapeForce; renderComponent.forceFullRedraw(); }
                 else if (g_scrapeCursor == idxAll)     toggleAll();
             } else if (cmd == CMD_ENTER) {
                 if (g_scrapeCursor == idxSource)        toggleSource();
+                else if (g_scrapeCursor == idxMedia)    toggleMedia();
                 else if (g_scrapeCursor == idxForce)  { g_scrapeForce = !g_scrapeForce; renderComponent.forceFullRedraw(); }
                 else if (g_scrapeCursor == idxAll)      toggleAll();
                 else if (g_scrapeCursor == idxStart)    startScrapeSelected();
@@ -1319,6 +1412,7 @@ void Application::handleCommand(ControlMap cmd) {
             if (cmd == CMD_BACK) {
                 g_optIndex = g_optJobs.size();
                 renderComponent.invalidateArtCache();
+                bgmResume(cfg);
                 state.currentMenuLevel = MenuLevel::APP_SETTINGS;
                 renderComponent.forceFullRedraw();
             }
@@ -1373,6 +1467,15 @@ void Application::handleCommand(ControlMap cmd) {
 
             if (cmd == CMD_ENTER) {
                 logMessage(INFO,"MenuLevel::MENU_FOLDER","CMD_ENTER");
+                // Ports.ini pattern: a lone core file launches directly
+                {
+                    Folder& fld = folders[state.currentFolderIndex];
+                    std::string port = portCoreFileForFolder(fld);
+                    if (!port.empty()) {
+                        launchRomWithPath(port, false, "", fld.getTitle());
+                        break;
+                    }
+                }
 
                 resetRomFolderNavigation();
                 state.currentMenuLevel = MenuLevel::MENU_ROM;
@@ -1400,9 +1503,7 @@ void Application::handleCommand(ControlMap cmd) {
 
                 buildSystemCoreRows(folderName);
 
-                bool anySelectable = false;
-                for (char s : vCoresSelectable) if (s) { anySelectable = true; break; }
-                if (!anySelectable) {
+                if (vCores.empty()) {
                     SetTip("No cores found for " + folderName);
                     return;
                 }
@@ -1411,6 +1512,7 @@ void Application::handleCommand(ControlMap cmd) {
                 currentCoreIndex = (selectCoreIndex >= 0) ? selectCoreIndex : 0;
                 while (currentCoreIndex < (int)vCores.size() && !vCoresSelectable[currentCoreIndex])
                     currentCoreIndex++;
+                if (currentCoreIndex >= (int)vCores.size()) currentCoreIndex = 0;   // info-only rows
 
                 coreSelectScope = CORE_SELECT_SYSTEM;
                 coreSelectReturnMenu = MENU_FOLDER;
@@ -1451,7 +1553,6 @@ void Application::handleCommand(ControlMap cmd) {
                 if (coreSelectScope == CORE_SELECT_GAME) {
                     if (coreSelectRomPath.empty())
                         return;
-
                     // RA override chain-loads MiSTer_RA and a per-game core can't escape it
                     {
                         std::string coreName = coreNameFromRbfPath(vCores[currentCoreIndex]);
@@ -1509,7 +1610,6 @@ void Application::handleCommand(ControlMap cmd) {
                     setSelectedCoreForSystem(folderName, chosen);
                     saveCoreSelectionCache();
                     logMessage(INFO,"Core override saved",folderName.c_str());
-
                     // an RA core turns on the chain-load ini line, a normal core comments it out
                     std::string coreName = coreNameFromRbfPath(chosen);
                     if (!coreName.empty()) {
@@ -1570,12 +1670,30 @@ void Application::handleCommand(ControlMap cmd) {
                     renderComponent.resetValues();
                     renderComponent.forceFullRedraw();
                 } else if (choice == "Scrape Art (Default)" || choice == "Scrape Art (TheGamesDB)") {
-
                     // art keys on the displayed cell path not the launch path
                     ScrapeSource src = (choice == "Scrape Art (TheGamesDB)") ? SCRAPE_SRC_TGDB : SCRAPE_SRC_LIBRETRO;
                     scrapeSingleGame(coreSelectFolderName, g_gameOptCellPath, src);
-                } else if (choice == "Hide Game") {
+                } else if (choice == "Hide Folder") {
 
+                    m_searchIndex.clear();          // stale entries would resurface the subtree
+                    m_searchIndexSystem.clear();
+                    std::string path = g_gameOptCellPath;   // addGame2List takes a mutable ref
+                    if (!path.empty()) {
+                        std::string name = renderComponent.getAlias(
+                            std::filesystem::path(path).filename().string());
+                        addGame2List(Configuration::HIDDEN, name, path);
+                        std::vector<Rom>* roms = getCurrentRomList();
+                        if (roms)
+                            roms->erase(std::remove_if(roms->begin(), roms->end(),
+                                        [this](const Rom& r){ return isHidden(r); }), roms->end());
+                        loadHistoryAndFavorites();
+                        SetTip("Folder hidden.");
+                    }
+                    state.currentMenuLevel = g_gameOptReturnMenu;
+                    renderComponent.resetValues();
+                    renderComponent.forceFullRedraw();
+                    m_dirty = true;
+                } else if (choice == "Hide Game") {
                     // hide keys on the launch path, the same identity favorites/history use
                     std::string path = coreSelectRomPath;
                     if (!path.empty()) {
@@ -1739,17 +1857,18 @@ void Application::handleCommand(ControlMap cmd) {
                 Rom* rom = getCurrentSelectedRom();
                 if (!rom)
                     return;
-
                 // IsCue is only accurate once a lazy folder is expanded
                 ensureRomExpanded(*rom);
-                if (rom->IsFolder() && !rom->IsCue())
-                    return;
-
-                std::string romPath = resolveLaunchPathForRom(*rom);
-                if (romPath.empty())
-                    return;
-
-                std::string romName = renderComponent.getAlias(resolveLaunchTitleForRom(*rom));
+                std::string romPath, romName;
+                if (rom->IsFolder() && !rom->IsCue()) {
+                    romPath = rom->getPath();
+                    romName = renderComponent.getAlias(rom->getTitle());
+                } else {
+                    romPath = resolveLaunchPathForRom(*rom);
+                    if (romPath.empty())
+                        return;
+                    romName = renderComponent.getAlias(resolveLaunchTitleForRom(*rom));
+                }
                 toggleFavorite(romName, romPath);
                 renderComponent.forceFullRedraw();
                 m_dirty = true;
@@ -1769,7 +1888,17 @@ void Application::handleCommand(ControlMap cmd) {
 
                 ensureRomExpanded(*rom);
                 if (rom->IsFolder() && !rom->IsCue()) {
-                    SetTip("Open folder first.");
+                    coreSelectScope = CORE_SELECT_GAME;
+                    coreSelectFolderName = folder.getTitle();
+                    coreSelectRomPath.clear();
+                    g_gameOptCellPath = rom->getPath();
+                    g_gameOptTitle = rom->getTitle();
+                    g_gameOptItems = { "Hide Folder" };
+                    g_gameOptReturnMenu = MENU_ROM;
+                    g_gameOptIndex = 0;
+                    state.currentMenuLevel = MenuLevel::MENU_GAME_OPTIONS;
+                    renderComponent.resetValues();
+                    renderComponent.forceFullRedraw();
                     return;
                 }
 
@@ -1909,7 +2038,7 @@ void Application::handleCommand(ControlMap cmd) {
                     if (sel.IsFolder() && !sel.IsCue()) {
                         SetTip("Open folder first.");
                     } else {
-                        g_gameOptCellPath  = sel.getPath();        // BG lookup path
+                        g_gameOptCellPath  = sel.getPath();
                         g_gameOptTitle     = std::filesystem::path(sel.getPath()).filename().string();
                         g_gameOptItems     = { "Set BG Image" };   // homebrew has no selectable cores
                         g_gameOptReturnMenu = MENU_HOMEBREW_GAME;
@@ -1932,6 +2061,7 @@ void Application::handleCommand(ControlMap cmd) {
                     state.currentMenuLevel = MenuLevel::MENU_MAIN;
                     try {
                         state = cfg.loadState();
+                        romFolderIndexStack = state.romFolderStack;
                     } catch (const StateNotFoundException&) {
 
                         state.currentMenuLevel = MenuLevel::MENU_MAIN;
@@ -1982,7 +2112,7 @@ void Application::handleCommand(ControlMap cmd) {
                     appSettings.setVisibleGroup(settingsGroups()[snd].keys);
                     g_settingsGroupIdx = snd;
                     currentSettingsIndex = wasBgm ? 1 : 2;
-                    // setVisibleGroup resets the cursor to slot 0
+
                     for (int i = 0; i < currentSettingsIndex; i++) appSettings.navigateDown();
                 } else {
                     g_settingsGroupIdx = -1;
@@ -2010,7 +2140,6 @@ void Application::handleCommand(ControlMap cmd) {
                         namespace fs = std::filesystem;
                         fs::remove("/tmp/consolemode/bluetooth_devices.log");
                         fs::remove("/tmp/consolemode/bt_pair_status.txt");
-
                         // kill a stale instance orphaned by a crash while this menu was open
                         std::string command = "[ -f /tmp/btstatus.pid ] && kill \"$(cat /tmp/btstatus.pid)\" 2>/dev/null; "
                                               "/tmp/consolemode/btstatus.sh & echo $! > /tmp/btstatus.pid";
@@ -2064,6 +2193,15 @@ void Application::handleCommand(ControlMap cmd) {
                     renderComponent.forceFullRedraw();
                     m_dirty = true;
                 }
+                else if (appSettings.getCurrentKey() == Configuration::TIMEZONE) {
+                    g_tzRegion.clear();
+                    tzLoadRegions();
+                    g_tzIdx = 0;
+                    state.currentMenuLevel = MenuLevel::MENU_TIMEZONE;
+                    renderComponent.resetValues();
+                    renderComponent.forceFullRedraw();
+                    m_dirty = true;
+                }
                 else if (appSettings.getCurrentKey() == Configuration::BGM
                       || appSettings.getCurrentKey() == Configuration::SFX_CONFIRM
                       || appSettings.getCurrentKey() == Configuration::SFX_BACK
@@ -2078,7 +2216,10 @@ void Application::handleCommand(ControlMap cmd) {
                     for (auto& e : std::filesystem::directory_iterator(dir, ec)) {
                         if (!e.is_regular_file(ec)) continue;
                         std::string n = e.path().filename().string();
-                        if (n.size() > 4 && n[0] != '.' && lowerCopy(n.substr(n.size() - 4)) == ".mp3")
+                        if (n.size() <= 4 || n[0] == '.') continue;
+                        std::string x = lowerCopy(n.substr(n.size() - 4));
+                        // BGM is mp3-only, SFX slots also take wav
+                        if (x == ".mp3" || (g_bgmTarget != 0 && x == ".wav"))
                             g_bgmFiles.push_back(n);
                     }
                     std::sort(g_bgmFiles.begin(), g_bgmFiles.end());
@@ -2093,7 +2234,6 @@ void Application::handleCommand(ControlMap cmd) {
                     state.currentMenuLevel = MenuLevel::MENU_SYSTEMCONFIG;
                 }
                 else if (appSettings.getCurrentKey() == Configuration::MISTER_INI_RES){
-
                     // write the video_mode preset into the ini then warm reboot to apply
                     if (appSettings.applyMisterIniVideoMode()) {
 #if !defined(MACOS) && !defined(X86)
@@ -2145,7 +2285,6 @@ void Application::handleCommand(ControlMap cmd) {
                         SetTip(cmupdate::phaseText());
                         cmupdate::startCheck(cfg.getBool(Configuration::USE_MIRROR));
                     } else {
-
                         // no check result yet, never download blind
                         cmupdate::startCheck(cfg.getBool(Configuration::USE_MIRROR));
                         SetTip("Checking for updates...");
@@ -2235,20 +2374,6 @@ void Application::handleCommand(ControlMap cmd) {
             }else if (cmd == CMD_ENTER) {
                 if (devSettings.getCurrentKey() == Configuration::LOADSCRIPT)
                     state.currentMenuLevel = MenuLevel::MENU_SCRIPT;
-                else if (devSettings.getCurrentKey() == Configuration::CD_TESTER){
-                    if (!cdtest::driveExists()) {
-                        SetTip("No CD drive found.");
-                    } else if (!cdtest::open()) {
-                        SetTip("No playable CD found.");
-                    } else {
-                        bgm::stop();   // the CD player owns the ALSA output while open
-                        m_cdIdx = 0;
-                        state.currentMenuLevel = MenuLevel::MENU_CD_TESTER;
-                        renderComponent.resetValues();
-                        renderComponent.forceFullRedraw();
-                        m_dirty = true;
-                    }
-                }
 #ifdef HAS_PS1
                 else if (devSettings.getCurrentKey() == Configuration::DISC_OPTIONS){
                     m_ps1.openDiscOptions();
@@ -2415,29 +2540,7 @@ void Application::handleCommand(ControlMap cmd) {
             break;
 
         case MENU_CD_TESTER:
-
-            if (cmd == CMD_BACK) {
-                cdtest::close();
-                bgmResume(cfg);
-                state.currentMenuLevel = MenuLevel::DEVTOOLS_SETTINGS;
-                renderComponent.forceFullRedraw();
-                m_dirty = true;
-            } else if (cmd == CMD_UP || cmd == CMD_DOWN) {
-                int n = (int)cdtest::items().size();
-                if (n > 0)
-                    m_cdIdx = (m_cdIdx + (cmd == CMD_UP ? -1 : 1) + n) % n;
-            } else if (cmd == CMD_ENTER) {
-                if (cdtest::playing() && m_cdIdx == cdtest::currentIndex())
-                    cdtest::togglePause();
-                else
-                    cdtest::play(m_cdIdx);
-            } else if (cmd == CMD_LEFT) {
-                cdtest::seek(-10);
-            } else if (cmd == CMD_RIGHT) {
-                cdtest::seek(10);
-            } else if (cmd == CMD_X) {
-                cdtest::stop();
-            }
+            handleCdCommand(cmd);
             break;
 
         case MENU_SYSTEMCONFIG:
@@ -2458,7 +2561,6 @@ void Application::handleCommand(ControlMap cmd) {
 
                 #ifdef X86
                 #else
-
                     // persist so a cold boot restores it, the host reads last_ini on init
                     {
                         std::ofstream lf(std::string(getHomePath()) + "/ConsoleMode/last_ini", std::ios::trunc);
@@ -2469,6 +2571,63 @@ void Application::handleCommand(ControlMap cmd) {
                     SDL_Quit();
                     rebootViaHost(ini_num);   // host applies the ini and warm reboots, does not return
                 #endif
+            }
+            break;
+
+        case MENU_MUSIC_LIB:
+        case MENU_MUSIC_SETTINGS:
+        case MENU_MUSIC_NOWPLAYING:
+        case MENU_MUSIC_PLAYER:
+        case MENU_MUSIC:
+            handleMusicCommand(state.currentMenuLevel, cmd);
+            break;
+
+        case MENU_TIMEZONE:
+            if (cmd == CMD_BACK) {
+                if (!g_tzRegion.empty()) {
+                    g_tzRegion.clear();
+                    tzLoadRegions();
+                    g_tzIdx = 0;
+                } else {
+                    state.currentMenuLevel = MenuLevel::APP_SETTINGS;
+                    renderComponent.resetValues();
+                }
+                renderComponent.forceFullRedraw();
+                m_dirty = true;
+            } else if (cmd == CMD_UP || cmd == CMD_DOWN) {
+                int n = 1 + (int)g_tzEntries.size();
+                g_tzIdx = (g_tzIdx + (cmd == CMD_UP ? -1 : 1) + n) % n;
+                m_dirty = true;
+            } else if (cmd == CMD_ENTER) {
+                std::string picked;
+                bool done = false;
+                if (g_tzRegion.empty()) {
+                    if (g_tzIdx == 0) { picked = Configuration::TIMEZONE_DEFAULT; done = true; }
+                    else if (g_tzIdx - 1 < (int)g_tzEntries.size()) {
+                        g_tzRegion = g_tzEntries[g_tzIdx - 1];
+                        tzLoadZones(g_tzRegion);
+                        g_tzIdx = 0;
+                    }
+                } else if (g_tzIdx == 0) {                                     // ".."
+                    g_tzRegion.clear();
+                    tzLoadRegions();
+                    g_tzIdx = 0;
+                } else if (g_tzIdx - 1 < (int)g_tzEntries.size()) {
+                    picked = g_tzRegion + "/" + g_tzEntries[g_tzIdx - 1];
+                    done = true;
+                }
+                if (done) {
+                    cfg.set(Configuration::TIMEZONE, picked);
+                    cfg.saveConfigIni();
+                    tzApply(cfg);
+                    tzWriteSystem(cfg);
+                    appSettings.setTransientValue(Configuration::TIMEZONE, picked);
+                    g_tzRegion.clear();
+                    state.currentMenuLevel = MenuLevel::APP_SETTINGS;
+                    renderComponent.resetValues();
+                }
+                renderComponent.forceFullRedraw();
+                m_dirty = true;
             }
             break;
 
@@ -2573,7 +2732,9 @@ void Application::handleCommand(ControlMap cmd) {
                 }
             } else if (cmd == CMD_OPTIONS) {
                 if (vecDev.size() > 0) {
-                    m_joyOptItems = {"Input Tester", "Delete Mapping"};
+                    m_joyOptItems = {"Input Tester", "Delete Mapping",
+                                     joySwapRowLabel(cfg, (currentJoystickIndex < (int)vecDev.size())
+                                                          ? vecDev[currentJoystickIndex].vid_pid : std::string())};
                     m_joyOptIndex = 0;
                     state.currentMenuLevel = MenuLevel::MENU_CONTROLS_JOY2;
                     renderComponent.forceFullRedraw();
@@ -2625,12 +2786,19 @@ void Application::handleCommand(ControlMap cmd) {
                 m_joyOptIndex = (m_joyOptIndex + nOpt - 1) % nOpt;
             } else if (cmd == CMD_DOWN && nOpt > 0) {
                 m_joyOptIndex = (m_joyOptIndex + 1) % nOpt;
-            } else if (cmd == CMD_ENTER && m_joyOptIndex < nOpt) {
+            } else if ((cmd == CMD_ENTER || cmd == CMD_LEFT || cmd == CMD_RIGHT) && m_joyOptIndex < nOpt) {
                 const std::vector<DeviceInfo> vecDev = JsMapper.getVecDevices();
                 if (currentJoystickIndex < (int)vecDev.size()) {
                     const DeviceInfo& d = vecDev[currentJoystickIndex];
                     std::string act = m_joyOptItems[m_joyOptIndex];
-                    if (act == "Input Tester") {
+                    if (act.rfind("Confirm/Back", 0) == 0) {
+                        joySwapCycle(cfg, d.vid_pid, cmd != CMD_LEFT);
+                        m_joyOptItems[m_joyOptIndex] = joySwapRowLabel(cfg, d.vid_pid);
+                        renderComponent.forceFullRedraw();
+                        m_dirty = true;
+                    } else if (cmd != CMD_ENTER) {
+                        // Left/Right only cycle the setting row
+                    } else if (act == "Input Tester") {
                         JsMapper.loadFile(d.path, d.type);   // load its codes so presses highlight
                         m_joyTesterVid = m_joyTesterPid = 0;
                         sscanf(d.vid_pid.c_str(), "%hx_%hx", &m_joyTesterVid, &m_joyTesterPid);
@@ -2661,7 +2829,6 @@ void Application::handleCommand(ControlMap cmd) {
             if (cmd == CMD_BACK) {
 
                 logMessage(INFO,"MENU_BLUETOOTH","stop pairing + scan");
-
                 // group kill so the run's scan child dies with the script
                 system("[ -f /tmp/bt_pair.pid ] && kill -- -$(cat /tmp/bt_pair.pid) 2>/dev/null; "
                        "bluetoothctl scan off >/dev/null 2>&1; "
@@ -2673,8 +2840,7 @@ void Application::handleCommand(ControlMap cmd) {
                     pid_t pid = 0;
                     int got = fscanf(fp, "%d", &pid);
                     fclose(fp);
-
-                    // only signal a real positive pid: 0 hits our group, -1 the whole uid. TERM lets its cleanup trap run
+                    // only signal a real positive pid, 0 hits our group and -1 the whole uid
                     if (got == 1 && pid > 0) kill(pid, SIGTERM);
                     remove("/tmp/btstatus.pid");
                 }
@@ -2726,6 +2892,7 @@ void Application::handleCommand(ControlMap cmd) {
                     bool saved = m_wifi.isSaved(wifiOptNet);
                     wifiOptItems.clear();
                     wifiOptItems.push_back("Connect");
+                    if (saved && wifiOptNet.active)        wifiOptItems.push_back("Disconnect");
                     if (saved && wifiOptNet.sec != "Open") wifiOptItems.push_back("Change Password");
                     if (saved)                             wifiOptItems.push_back("Forget");
                     state.currentMenuLevel = MenuLevel::MENU_WIFI_OPTIONS;
@@ -2757,6 +2924,8 @@ void Application::handleCommand(ControlMap cmd) {
                 } else if (act == "Change Password") {
                     wifiPending = wifiOptNet;
                     renderComponent.openTextInput("Password for " + wifiOptNet.ssid);
+                } else if (act == "Disconnect") {
+                    m_wifi.disconnect(wifiOptNet);
                 } else if (act == "Forget") {
                     m_wifi.forget(wifiOptNet);
                 }
@@ -2772,7 +2941,6 @@ void Application::handleCommand(ControlMap cmd) {
             break;
 #endif
     }
-
     // these menus need their own Back teardown so no settings shortcut into them
     if (cmd == CMD_SYS_SETTINGS &&
         state.currentMenuLevel != MenuLevel::MENU_SCRAPE_PROGRESS &&
@@ -2800,7 +2968,8 @@ void Application::handleCommand(ControlMap cmd) {
             currentKey == Configuration::CLEAR_CACHE || currentKey == Configuration::QUIT ||
             currentKey == Configuration::UPDATE ||
             currentKey == Configuration::SCRAPE_ARTWORK || currentKey == Configuration::IMPORT_GAMELIST ||
-            currentKey == Configuration::OPTIMIZE_ARTWORK || currentKey == Configuration::MANAGE_HIDDEN
+            currentKey == Configuration::OPTIMIZE_ARTWORK || currentKey == Configuration::MANAGE_HIDDEN ||
+            currentKey == Configuration::TIMEZONE
             ){
                 onlyEnter = true;
             }
@@ -2833,7 +3002,6 @@ void Application::handleCommand(ControlMap cmd) {
             }
         }
 
-        // a L/R value change keeps the same row so force a repaint to show the new value
         if (cmd == CMD_LEFT || cmd == CMD_RIGHT)
             renderComponent.forceFullRedraw();
 
@@ -2881,6 +3049,8 @@ void Application::run() {
     }
 #endif
 
+    loadMusicPrefs();
+
     islaunchedByMiSTer = consolemodeConsumeMisterLaunchMarker();
     if(islaunchedByMiSTer)
         logMessage(INFO,"begin run","islaunchedByMiSTer is true");
@@ -2899,7 +3069,6 @@ void Application::run() {
 
     if (inisafe::g_fileReset.load())
         SetTip("A settings file was corrupt and was reset (kept as .bad).");
-
     // restores the .bak and re-execs if a self-update is boot-looping
     cmupdate::armUpdateWatchdog();
 
@@ -2932,7 +3101,7 @@ void Application::run() {
 #ifdef __linux__
 
     {
-        // pin the render thread to core 0 and briefly raise priority through boot contention
+        // pin the render thread to core 0 through boot contention
         cpu_set_t set; CPU_ZERO(&set); CPU_SET(0, &set);
         sched_setaffinity(0, sizeof(set), &set);
     }
@@ -2966,6 +3135,7 @@ void Application::run() {
     }
 #endif
 
+    tzApply(cfg);
     soundsMigrateDirs(cfg);
     bgmLoadSfxIfConfigured(cfg);
 
@@ -3014,16 +3184,27 @@ void Application::run() {
     }
 
     g_bgmLive = true;
-    bgmStartIfConfigured(cfg);
-
+    // starting BGM here would play it under the splash
+    bool bgmPendingStart = true;
     // load USB caches before the first frame so last-used games show immediately
     loadUsbRom();
 
-    if (cfg.getBool(Configuration::BOOT_TO_GAMES)) {
-        resetRomFolderNavigation();
-        state.currentMenuLevel = MenuLevel::MENU_SECTION;
-        state.currentSectionIndex = 0;
-        renderComponent.resetValues();
+    {
+        const std::string bootTo = cfg.get(Configuration::BOOT_TO_GAMES);
+        if (bootTo == "true" || bootTo == "Load Game") {       // "true" is the old bool form
+            resetRomFolderNavigation();
+            state.currentMenuLevel = MenuLevel::MENU_SECTION;
+            state.currentSectionIndex = 0;
+            renderComponent.resetValues();
+        } else if (bootTo == "History") {
+            state.currentMenuLevel = MenuLevel::MENU_HISTORY;
+            state.currentHistoryIndex = 0;
+            renderComponent.resetValues();
+        } else if (bootTo == "Favorites") {
+            state.currentMenuLevel = MenuLevel::MENU_FAVORITES;
+            state.currentFavoritesIndex = 0;
+            renderComponent.resetValues();
+        }
     }
 
     while (isRunning) {
@@ -3056,7 +3237,6 @@ void Application::run() {
             }
         }
 #endif
-
         // a pre-2023 clock fails every TLS cert so kick NTP instead of spending an attempt
         { static int s_cmTries = 0; static Uint32 s_cmNext = 6000;
           if ((SDL_GetTicks() - runStartMs) > s_cmNext && !cmupdate::checkSettled() &&
@@ -3083,17 +3263,16 @@ void Application::run() {
 
         adoptRbfScanResult();
 
-        // while a direction is held, poll instead of blocking so repeats aren't quantised to the frame
         bool held = false;
         for (int i = 0; i < m_evCount; i++)
             if (m_evfd[i].isOpen && (m_evfd[i].hat_x != 0 || m_evfd[i].hat_y != 0)) { held = true; break; }
 
-        // block in select() for input unless something changed or is animating
         bool active = m_dirty || held || tipStartTime > 0 ||
                       renderComponent.needsContinuousRedraw() ||
 #ifdef HAS_PS1
                       state.currentMenuLevel == MENU_CD ||
 #endif
+                      musicWantsTicks() ||
                       state.currentMenuLevel == MENU_CD_TESTER ||
                       state.currentMenuLevel == MENU_BLUETOOTH ||
                       state.currentMenuLevel == MENU_WIFI ||
@@ -3132,7 +3311,6 @@ void Application::run() {
                     ssize_t n = read(m_evfd[i].fd, &ev, sizeof(ev));
 
                     if (n == sizeof(ev)) {
-
                         // opt-in: log key press/release edges to debug dropped KEYUPs
                         if (ev.type == EV_KEY && ev.value != 2 && isLoggingEnabled()) {
                             static int evTrace = 0;
@@ -3145,7 +3323,6 @@ void Application::run() {
                                                   SDL_GetTicks(), m_evfd[i].path, m_evfd[i].vid, m_evfd[i].pid, kn, ev.code, ev.code, ev.value); fclose(tf); }
                             }
                         }
-
                         // capture buttons + d-pad from every device for a VID:PID readout
                         if (state.currentMenuLevel == MENU_INPUT_TESTER &&
                             ((ev.type == EV_KEY && ev.value != 2) ||
@@ -3209,7 +3386,6 @@ void Application::run() {
 
                         if (ev.type == EV_SYN) continue;
                         if (ev.type == EV_MSC) continue;
-
                         // the MiSTer mirror doesn't forward Select/Start so grab those from the physical node
                         if (m_evfd[i].ignoreForInput) {
                             if (ev.type == EV_KEY && ev.value == 1) {
@@ -3221,21 +3397,18 @@ void Application::run() {
                             }
                             continue;
                         }
-
                         // Sony pad: hat only, except while a capture is armed
                         if (m_evfd[i].vid == 0x054c && ev.type == EV_ABS &&
                             !(state.currentMenuLevel == MENU_CONTROLS_JOY1 && joystickKeyState == 1)){
                             if (!(ev.code == ABS_HAT0X || ev.code == ABS_HAT0Y))
                                 continue;
                         }
-
                         // 0=release (keyboard arrow tracking), 1=press
                         if (((ev.value == 0 || ev.value == 1) && ev.type == EV_KEY) ||
                             (ev.type == EV_ABS && (ev.code == ABS_HAT0X || ev.code == ABS_HAT0Y)) ||
                             ( (m_evfd[i].vid == 0x0ca3 || m_evfd[i].vid == 0x2dc8 || m_evfd[i].vid == 0x045e) && ev.type == EV_ABS && (ev.code == ABS_X || ev.code == ABS_Y)) ||
                             (ev.type == EV_ABS && (ev.code == m_evfd[i].mapAx1X || ev.code == m_evfd[i].mapAx1Y)) ||
                             (ev.type == EV_ABS && state.currentMenuLevel == MENU_CONTROLS_JOY1 && joystickKeyState == 1) ){
-
                             // no logging here, it fires per event and each line fflushes to the SD
                             bool isHander = process_evdev_event(&m_evfd[i], &ev);
                             if (isHander)
@@ -3270,7 +3443,6 @@ void Application::run() {
                 continue;
 
             EvDev* d = &m_evfd[i];
-
             // force-release a kernel-stuck d-pad after ~5s of dead-repeat
             if (d->hat_x == 0 && d->hat_y == 0) { d->repeatRun = 0; d->stuckLogged = false; }
             else {
@@ -3425,7 +3597,6 @@ void Application::run() {
             fpsTimer = SDL_GetTicks();
 
 #ifdef __linux__
-
             // opt-in: 1Hz kernel key-state vs our latch, to catch stuck/grabbed devices
             if (isLoggingEnabled()) { static int snapN = 0;
               if (snapN < 180) { snapN++;
@@ -3492,6 +3663,8 @@ void Application::run() {
             if (lt.tm_min != lastClockMin) { lastClockMin = lt.tm_min; m_dirty = true; renderComponent.forceFullRedraw(); }
         }
 
+        pollMusicRedraw();
+
         bool thumbDrew = renderComponent.pollThumbResult();
 
         if (state.currentMenuLevel != prevDrawMenu) {
@@ -3512,12 +3685,13 @@ void Application::run() {
 #ifdef HAS_PS1
                           state.currentMenuLevel == MENU_CD ||
 #endif
+                          musicWantsTicks() ||
                           state.currentMenuLevel == MENU_CD_TESTER ||
                           state.currentMenuLevel == MENU_BLUETOOTH ||
                           state.currentMenuLevel == MENU_WIFI ||
                           state.currentMenuLevel == MENU_JOY_TESTER ||
                           (SDL_GetTicks() - runStartMs) < 5000;
-        bool bgAdopted = renderComponent.takeBgAdopted();   // finished BG decode forces one full repaint
+        bool bgAdopted = renderComponent.takeBgAdopted();
         if (needRender || renderComponent.needsContinuousRedraw() || bgAdopted) {
             struct timespec _t0, _t1, _t2;
             clock_gettime(CLOCK_MONOTONIC, &_t0);
@@ -3534,13 +3708,15 @@ void Application::run() {
             if (_pUs > perfPresentMaxUs) perfPresentMaxUs = _pUs;
             perfRenderedFrames++;
             frameCount++;
-
+            if (bgmPendingStart) {
+                bgmPendingStart = false;
+                bgmStartIfConfigured(cfg);
+            }
             // after 100 rendered frames the new binary is good, disarm the rollback
             { static long s_healthFrames = 0;
               if (++s_healthFrames == 100) cmupdate::updateHealthy(); }
             m_dirty = false;
 #ifdef MACOS
-
             // mac: $CONSOLEMODE_SHOT writes a BMP then exits
             { static const char* shot = getenv("CONSOLEMODE_SHOT");
               static const char* keys = getenv("CONSOLEMODE_KEYS");
@@ -3560,7 +3736,6 @@ void Application::run() {
         } else if (thumbDrew) {
             renderComponent.update();
         }
-
         // boot instrumentation: one-shot milestones + 500ms samples for the first 30s
         if (bootTimingActive()) {
             static bool s_firstFrame = false, s_decodeDone = false, s_sawPending = false;
@@ -3585,7 +3760,6 @@ void Application::run() {
                          + " frames=" + std::to_string(perfRenderedFrames));
             }
         }
-
         // held-scroll needs a 2ms floor so key-repeats aren't quantised to the frame
         bool fastPace = held || tipStartTime > 0;
         Uint32 pace = fastPace ? 2 : frameDelay;
@@ -3624,6 +3798,10 @@ void Application::launchRom() {
 
     logMessage(INFO,"launchRom",romPath.c_str());
 
+#if !defined(MACOS) && !defined(X86)
+    // Zaparoo convention: raw path, no trailing newline
+    if (FILE* ag = fopen("/tmp/ACTIVEGAME", "w")) { fputs(romPath.c_str(), ag); fclose(ag); }
+#endif
     std::string launchPath = romPath;
     appendSelectedCoreToLaunchPath(launchPath, folderName);
     logMessage(INFO,"MiSTer_RR_cmd final",launchPath.c_str());
@@ -3658,7 +3836,7 @@ void Application::settingsChanged(const std::string& key, const std::string& val
         m_dirty = true;
     }
     else if (key == Configuration::BGM_ENABLED || key == Configuration::BGM_MODE) {
-        // bgmApply reads the config
+
         bool cfgChanged = (cfg.get(key) != value);
         cfg.set(key, value);
         if (cfgChanged) cfg.saveConfigIni();
@@ -3667,7 +3845,7 @@ void Application::settingsChanged(const std::string& key, const std::string& val
         m_dirty = true;
     }
     else if (key == Configuration::BG_COLOR) {
-        // bg color affects the whole screen so force a full redraw
+
         renderComponent.setBgColor(value);
         appSettings.currentValue = value;
 
@@ -3698,7 +3876,6 @@ void Application::settingsChanged(const std::string& key, const std::string& val
         m_dirty = true;
     }
     else if (key == Configuration::BT_RECONNECT || key == Configuration::BT_REPAIR) {
-
         // cfg still holds the old value here so take the changed key from the notification
         std::string rec = (key == Configuration::BT_RECONNECT) ? value : cfg.get(Configuration::BT_RECONNECT);
         std::string rep = (key == Configuration::BT_REPAIR)    ? value : cfg.get(Configuration::BT_REPAIR);
@@ -3707,7 +3884,6 @@ void Application::settingsChanged(const std::string& key, const std::string& val
         writeBtConfig(rec, rep);
     }
     else if (key == Configuration::CRT_OVERSCAN) {
-
         // overscan is a layout inset, the theme has to re-lay out
         if (m_fontsReady) {
             theme.setResolution(cfg.getInt(Configuration::SCREEN_WIDTH), cfg.getInt(Configuration::SCREEN_HEIGHT));
@@ -3717,7 +3893,6 @@ void Application::settingsChanged(const std::string& key, const std::string& val
         }
     }
     else if (key == Configuration::CRT_FONT) {
-
         // the ctor notify fires before renderComponent exists so guard on m_fontsReady, not a member
         if (m_fontsReady) {
             renderComponent.loadFonts();
@@ -3744,8 +3919,7 @@ void Application::settingsChanged(const std::string& key, const std::string& val
             exit(EXIT_CONSOLE_QUIT);
         }
     }
-
-    // rewrite only on a real change (observers fire ~40x at boot), and never persist the computed MISTER_INI_RES row
+    // observers fire ~40x at boot, only rewrite on a real change
     if (key != Configuration::MISTER_INI_RES && key != Configuration::MISTER_INI_HDR
         && key != Configuration::MISTER_INI_SD) {
         bool cfgChanged = (cfg.get(key) != value);
@@ -3754,7 +3928,6 @@ void Application::settingsChanged(const std::string& key, const std::string& val
     }
 
     if (key == Configuration::HISTORY_SIZE) {
-
         // trim the visible history now, don't wait for the next launch
         int histCap = atoi(value.c_str());
         if (histCap < 5 || histCap > 100) histCap = 20;
@@ -3776,6 +3949,12 @@ void Application::settingsChanged(const std::string& key, const std::string& val
 
     if (key == Configuration::SHOW_HOMEBREW) {
         InitMainMenu();
+    }
+
+    if (key == Configuration::SHOW_MUSIC) {   // add/remove the Music entry
+        InitMainMenu();
+        renderComponent.forceFullRedraw();
+        m_dirty = true;
     }
 
     if (key == Configuration::SHOW_RESUME) {   // add/remove the Resume Game entry
