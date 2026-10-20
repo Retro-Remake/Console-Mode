@@ -46,6 +46,7 @@ const std::string Configuration::QUIT = std::string("APPLICATION.quit");
 const std::string Configuration::UPDATE_TIME = std::string("APPLICATION.updateTime");
 const std::string Configuration::BG_COLOR = std::string("APPLICATION.bgColor");
 const std::string Configuration::BG_ART = std::string("APPLICATION.bgArt");
+const std::string Configuration::SHOW_PLAYTIME = std::string("APPLICATION.showPlaytime");
 const std::string Configuration::SEL_COLOR = std::string("APPLICATION.selColor");
 const std::string Configuration::NET = std::string("APPLICATION.net");
 const std::string Configuration::LOADCONFIG = std::string("APPLICATION.loadConfig");
@@ -69,6 +70,7 @@ const std::string Configuration::USE_MIRROR = std::string("DEVTOOLS.useMirror");
 const std::string Configuration::LANGUAGE = std::string("DEVTOOLS.language");
 #ifdef HAS_PS1
 const std::string Configuration::PS1_FAST = std::string("DEVTOOLS.ps1fast");
+const std::string Configuration::PS1_DUMP_PATH = std::string("DEVTOOLS.ps1dumppath");
 const std::string Configuration::DISC_OPTIONS = std::string("DEVTOOLS.discOptions");
 #endif
 const std::string Configuration::CONTROLS = std::string("DEVTOOLS.controls");

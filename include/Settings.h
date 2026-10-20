@@ -173,6 +173,8 @@ public:
                 updateBgmMode(false);
             } else if (currentKey == Configuration::BG_ART){
                 updateBoolSetting();
+            } else if (currentKey == Configuration::SHOW_PLAYTIME){
+                updateBoolSetting();
             } else if (currentKey == Configuration::AB_SWAP){
                 updateBoolSetting();
             } else if (currentKey == Configuration::XY_SWAP){
@@ -234,6 +236,8 @@ public:
             } else if (currentKey == Configuration::BOOT_TO_GAMES) {
                 updateBootTo(true);
             } else if (currentKey == Configuration::BG_ART) {
+                updateBoolSetting();
+            } else if (currentKey == Configuration::SHOW_PLAYTIME) {
                 updateBoolSetting();
             } else if (currentKey == Configuration::GAME_STYLE) {
                 updateGameStyle(true);

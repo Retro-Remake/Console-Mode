@@ -23,7 +23,7 @@ static std::string defaultSettingLabel(const std::string& id) {
     static const std::unordered_map<std::string,std::string> kDefaults = {
         // App settings
         {"volume","Volume"}, {"net","Network"}, {"bluetooth","Bluetooth"},
-        {"bgColor","Background Color"}, {"bgArt","Background Artwork"}, {"selColor","Selection Color"}, {"gameStyle","Game Style"}, {"buttonStyle","Button Labels"}, {"clockFormat","Clock Format"}, {"iconSet","Category Icons"}, {"timezone","Time Zone"}, {"bootToGames","Boot To"}, {"btReconnect","BT Reconnect"}, {"btRePair","BT Re-Pair"}, {"screenRes","Console Mode Resolution"}, {"misterIniRes","MiSTer INI Resolution"}, {"misterIniHdr","MiSTer INI HDR"}, {"misterIniScandoubler","MiSTer INI Scandoubler"}, {"crtOverscan","CRT Overscan"}, {"crtFont","CRT Font"},
+        {"bgColor","Background Color"}, {"bgArt","Background Artwork"}, {"showPlaytime","Show Playtime"}, {"selColor","Selection Color"}, {"gameStyle","Game Style"}, {"buttonStyle","Button Labels"}, {"clockFormat","Clock Format"}, {"iconSet","Category Icons"}, {"timezone","Time Zone"}, {"bootToGames","Boot To"}, {"btReconnect","BT Reconnect"}, {"btRePair","BT Re-Pair"}, {"screenRes","Console Mode Resolution"}, {"misterIniRes","MiSTer INI Resolution"}, {"misterIniHdr","MiSTer INI HDR"}, {"misterIniScandoubler","MiSTer INI Scandoubler"}, {"crtOverscan","CRT Overscan"}, {"crtFont","CRT Font"},
         {"loadConfig","System Config"}, {"updateTime","Set Time"}, {"clearcache","Rebuild Game Database"},
         {"update","Update"}, {"updateCM","Update Console Mode"}, {"scrapeArtwork","Scrape Artwork"}, {"optimizeArtwork","Optimize Artwork"}, {"importGamelist","Import gamelist.xml"}, {"manageHidden","Manage Hidden Games"}, {"hideSections","Hide Categories"},
         {"devtools","Developer Tools"}, {"quit","Quit"}, {"inputTester","Input Tester"}, {"kbMapping","Console Mode Keyboard Mapping"}, {"cdTester","CD Player"},
@@ -95,6 +95,7 @@ AppSettings::AppSettings(Configuration& cfg, Languages& languages,
         Configuration::ICON_SET,
         Configuration::BG_COLOR,
         Configuration::BG_ART,
+        Configuration::SHOW_PLAYTIME,
         Configuration::SEL_COLOR,
         Configuration::SCREEN_RES,
         Configuration::MISTER_INI_RES,
@@ -210,6 +211,8 @@ std::vector<Settings::SettingRow> RomSettings::getRomSettings() {
 }
 
 #include "misterini.h"
+#include "boot_timing.h"
+#include <chrono>
 // MiSTer video_mode presets, indices 0-14, 14 = pixel-repeat
 static const char* kMisterVideoModes[] = {
     "1280x720@60",  "1024x768@60",  "720x480@60",   "720x576@50",   "1280x1024@60",
@@ -669,8 +672,10 @@ void Settings::initializeSettings() {
     std::string path = cfg.get(Configuration::HOME_PATH);
     for(int i = 0 ; i < 4; i++)
         MisterInis.push_back(misterIniLabel(i,path.c_str() ) );
+    bootMark("settings: ini labels");
 
     for (const auto& key : defaultKeys) {
+        const auto keyT0 = std::chrono::steady_clock::now();
         // every key is always shown, config.ini only supplies the value
         std::string value = cfg.get(key);
         // seed History Size so stoi does not throw on a missing key
@@ -701,6 +706,7 @@ void Settings::initializeSettings() {
         if (value.empty() && key == Configuration::ROUND_SEL)     value = "true";
         if (value.empty() && key == Configuration::SHOW_MUSIC)     value = "true";
         if (value.empty() && key == Configuration::BG_ART)       value = "true";
+        if (value.empty() && key == Configuration::SHOW_PLAYTIME) value = "true";
         if (value.empty() && key == Configuration::PERF_MODE)    value = "Off";
         if (value.empty() && key == Configuration::CRT_OVERSCAN) value = "0%";
         if (value.empty() && key == Configuration::CRT_FONT)      value = "Sharp";
@@ -731,7 +737,11 @@ void Settings::initializeSettings() {
         settingsMap[key] = {key, value, true};
         if (!value.empty())
             notifySettingsChange(key, value);
+        const long long keyMs = std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::steady_clock::now() - keyT0).count();
+        if (keyMs >= 10) bootMark("settings: slow key " + key + " " + std::to_string(keyMs) + "ms");
     }
+    bootMark("settings: key loop");
     // crt::active() is false before crt::init() runs
     if (settingsMap.count(Configuration::CRT_OVERSCAN)) {
         const char* crtEnv = getenv("CONSOLEMODE_CRT");
@@ -763,6 +773,7 @@ void Settings::initializeSettings() {
         index = 0;
 
     iniIndex = index;
+    bootMark("settings: tail");
 }
 
 std::vector<std::string> Settings::getEnabledKeys() {

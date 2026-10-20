@@ -87,6 +87,7 @@ public:
     static const std::string UPDATE_TIME;
     static const std::string BG_COLOR;
     static const std::string BG_ART;
+    static const std::string SHOW_PLAYTIME;
     static const std::string SEL_COLOR;
     static const std::string CONTROLS;
     static const std::string INPUT_TESTER;
@@ -124,6 +125,7 @@ public:
     static const std::string SHOW_MUSIC;
 #ifdef HAS_PS1
     static const std::string PS1_FAST;
+    static const std::string PS1_DUMP_PATH;
     static const std::string DISC_OPTIONS;
 #endif
 

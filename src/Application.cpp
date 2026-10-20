@@ -26,6 +26,7 @@
 #include "IniSafe.h"
 #include "UpdateManager.h"
 #include "boot_timing.h"
+#include "cpu_diag.h"
 #include "build_info.h"
 #include "scraper.h"
 #include <boost/property_tree/xml_parser.hpp>
@@ -3050,6 +3051,7 @@ void Application::run() {
 #endif
 
     loadMusicPrefs();
+    bootMark("run: music prefs");
 
     islaunchedByMiSTer = consolemodeConsumeMisterLaunchMarker();
     if(islaunchedByMiSTer)
@@ -3071,10 +3073,12 @@ void Application::run() {
         SetTip("A settings file was corrupt and was reset (kept as .bad).");
     // restores the .bak and re-execs if a self-update is boot-looping
     cmupdate::armUpdateWatchdog();
+    bootMark("run: watchdog");
 
     logMessage(INFO,"run", "start");
 
     int last_count = count_event_devices();
+    bootMark("run: count devices");
 
     SDL_Event event;
 
@@ -3085,6 +3089,7 @@ void Application::run() {
     Uint32 frameStart = 0;
 
     openInputDev();
+    bootMark("run: open input");
     struct input_event ev;
 
     int screenRefresh = cfg.getInt(Configuration::SCREEN_REFRESH);
@@ -3149,9 +3154,11 @@ void Application::run() {
             Uint32 MOD_MS = 3000;           // Moderate minimum hold
             Uint32 CAP_MS = std::max(SLOW_MS, MOD_MS) + 10000;   // never gate longer than this
             bool slow = (bootSpeed == "Safest" || bootSpeed == "Slow");
+            // warm return: only wait on decode
+            const bool warm = renderComponent.iconsWarm();
             int total = renderComponent.thumbPreloadCount();
             Uint32 gateStart = SDL_GetTicks();
-            bootMark("splash-gate-enter (" + bootSpeed + ")");
+            bootMark("splash-gate-enter (" + bootSpeed + (warm ? ", warm" : "") + ")");
             while (isRunning) {
 #if defined(__linux__)
                 for (int i = 0; i < m_evCount; i++) {
@@ -3167,11 +3174,11 @@ void Application::run() {
                 Uint32 elapsed = SDL_GetTicks() - gateStart;
                 bool decodeDone = (pending == 0);
 
-                Uint32 minMs = slow ? SLOW_MS : MOD_MS;
+                Uint32 minMs = warm ? 0 : slow ? SLOW_MS : MOD_MS;
                 bool ready = decodeDone && elapsed >= minMs;
                 if (ready || elapsed >= CAP_MS) break;
                 float decodeFrac = (total > 0) ? (float)(total - pending) / (float)total : 1.0f;
-                float prog = std::min(decodeFrac, (float)elapsed / (float)minMs);
+                float prog = minMs ? std::min(decodeFrac, (float)elapsed / (float)minMs) : decodeFrac;
                 renderComponent.drawBootSplash(prog, "Loading...");
                 renderComponent.update();
                 SDL_Delay(16);
@@ -3188,6 +3195,7 @@ void Application::run() {
     bool bgmPendingStart = true;
     // load USB caches before the first frame so last-used games show immediately
     loadUsbRom();
+    bootMark("loadUsbRom");
 
     {
         const std::string bootTo = cfg.get(Configuration::BOOT_TO_GAMES);
@@ -3277,8 +3285,7 @@ void Application::run() {
                       state.currentMenuLevel == MENU_BLUETOOTH ||
                       state.currentMenuLevel == MENU_WIFI ||
                       state.currentMenuLevel == MENU_OPTIMIZE_PROGRESS ||
-                      state.currentMenuLevel == MENU_UPDATE_CM_PROGRESS ||
-                      (SDL_GetTicks() - runStartMs) < 5000;
+                      state.currentMenuLevel == MENU_UPDATE_CM_PROGRESS;
 
         fd_set rfds;
         FD_ZERO(&rfds);
@@ -3671,28 +3678,37 @@ void Application::run() {
             renderComponent.forceFullRedraw();
             prevDrawMenu = state.currentMenuLevel;
         }
-        if (tipStartTime > 0 ||
+        static Uint32 s_lastStartupRepaint = 0;
+        const Uint32 nowRepaint = SDL_GetTicks();
+        const bool startupRepaint = (nowRepaint - runStartMs) < 5000 && (nowRepaint - s_lastStartupRepaint) >= 500;
+        if (startupRepaint) s_lastStartupRepaint = nowRepaint;
+        // tips blend over the screen and need a clean repaint under them
+        const bool tipExpired = tipStartTime > 0 && (int)(nowRepaint - tipStartTime) > m_tipDurationMs;
+        const bool tipRepaint = tipStartTime > 0 && (m_dirty || tipExpired);
+        const bool statusScreen =
 #ifdef HAS_PS1
             state.currentMenuLevel == MENU_CD ||
 #endif
             state.currentMenuLevel == MENU_CD_TESTER ||
             state.currentMenuLevel == MENU_BLUETOOTH ||
-            state.currentMenuLevel == MENU_WIFI ||
-            (SDL_GetTicks() - runStartMs) < 5000)
+            state.currentMenuLevel == MENU_WIFI;
+        static Uint32 s_lastStatusRepaint = 0;
+        const bool statusRepaint = statusScreen && (m_dirty || nowRepaint - s_lastStatusRepaint >= 250);
+        if (statusRepaint) s_lastStatusRepaint = nowRepaint;
+        if (tipRepaint || statusRepaint || startupRepaint)
             renderComponent.forceFullRedraw();
 
-        bool needRender = m_dirty || tipStartTime > 0 ||
-#ifdef HAS_PS1
-                          state.currentMenuLevel == MENU_CD ||
-#endif
+        bool needRender = m_dirty || tipRepaint || statusRepaint ||
                           musicWantsTicks() ||
-                          state.currentMenuLevel == MENU_CD_TESTER ||
-                          state.currentMenuLevel == MENU_BLUETOOTH ||
-                          state.currentMenuLevel == MENU_WIFI ||
                           state.currentMenuLevel == MENU_JOY_TESTER ||
-                          (SDL_GetTicks() - runStartMs) < 5000;
+                          startupRepaint;
         bool bgAdopted = renderComponent.takeBgAdopted();
-        if (needRender || renderComponent.needsContinuousRedraw() || bgAdopted) {
+        static Uint32 s_lastFrameRender = 0;
+        const bool animDue = renderComponent.needsContinuousRedraw() && nowRepaint - s_lastFrameRender >= frameDelay;
+        const bool anyRender = needRender || animDue || bgAdopted;
+        if (anyRender) s_lastFrameRender = nowRepaint;
+        if (anyRender && tipStartTime > 0 && !tipRepaint) renderComponent.forceFullRedraw();
+        if (anyRender) {
             struct timespec _t0, _t1, _t2;
             clock_gettime(CLOCK_MONOTONIC, &_t0);
             drawCurrentState();
@@ -3744,6 +3760,11 @@ void Application::run() {
             Uint32 nowT = SDL_GetTicks();
             if (!s_firstFrame && perfRenderedFrames >= 1) {
                 s_firstFrame = true; bootMark("first-frame (menu visible)");
+                cpuDiagStart();
+            }
+            static bool s_cpuMarked = false;
+            if (s_firstFrame && !s_cpuMarked && (nowT - runStartMs) >= 5500) {
+                s_cpuMarked = true; cpuDiagMark("first 5s after menu");
             }
             if ((nowT - runStartMs) < 30000 && nowT - s_lastSample >= 500) {
                 s_lastSample = nowT;
@@ -3758,10 +3779,11 @@ void Application::run() {
                 }
                 bootMark("sample q=" + std::to_string(pend) + " dev=" + std::to_string(dev)
                          + " frames=" + std::to_string(perfRenderedFrames));
+                cpuDiagTick();
             }
         }
         // held-scroll needs a 2ms floor so key-repeats aren't quantised to the frame
-        bool fastPace = held || tipStartTime > 0;
+        bool fastPace = held;
         Uint32 pace = fastPace ? 2 : frameDelay;
         Uint32 elapsed = SDL_GetTicks() - frameStart;
         if (elapsed < pace)
@@ -3823,6 +3845,7 @@ void Application::settingsChanged(const std::string& key, const std::string& val
         notifyLanguageChange();
 
     } else if (key == Configuration::CORE_OVERRIDE) {
+        if (menu.getSections().empty()) return;
         MenuCache menuCache;
 
         std::string cacheFilePath = globalCachePath();

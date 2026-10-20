@@ -19,7 +19,14 @@
 #include "UpdateManager.h"
 #include "miniz.h"
 #include <sched.h>
+#include <unistd.h>
+#include <cstring>
 #include <sys/resource.h>
+#if defined(__linux__)
+#include <fcntl.h>
+#include <sys/ioctl.h>
+#include <linux/fb.h>
+#endif
 #include "RenderComponent.h"
 #include "scraper.h"
 #include "Configuration.h"
@@ -98,23 +105,26 @@ void RenderComponent::drawRomList(const std::string& folderName, const std::vect
                 int newY = baseY + (currentRomIndex - startIndex) * stepY;
                 std::string oldAlias = disp(romData[m_prevRomSel].first);
                 std::string newAlias = disp(romData[currentRomIndex].first);
-                drawRomRowUnselected(cachedText(font, oldAlias, theme.getColor(Configuration::ITEMS_FONT_COLOR)),
-                                     startX, oldY, clipWidth);
-                scrollPixelPosition = 0;                 // restart marquee
-                selectTime = SDL_GetTicks();
-                drawRomRowSelected(cachedText(font, newAlias, theme.getColor(Configuration::SEL_ITEM_FONT_COLOR)),
-                                   startX, newY, clipWidth);
-                if (!m_textOnly) {    // Performance Mode: no art
-                    requestThumbnail(romData[currentRomIndex].second, exactArt);
-
-                    drawListArt(thumbnail, m_listArtIsLogo);
+                {
+                    drawRomRowUnselected(cachedText(font, oldAlias, theme.getColor(Configuration::ITEMS_FONT_COLOR)),
+                                         startX, oldY, clipWidth);
+                    scrollPixelPosition = 0;                 // restart marquee
+                    selectTime = SDL_GetTicks();
+                    drawRomRowSelected(cachedText(font, newAlias, theme.getColor(Configuration::SEL_ITEM_FONT_COLOR)),
+                                       startX, newY, clipWidth);
                 }
+                if (!m_textOnly) {    // Performance Mode: no art
+                    SDL_Surface* shown = thumbnail;
+                    requestThumbnail(romData[currentRomIndex].second, exactArt);
+                    // the box already shows `shown` until the new art arrives
+                    if (thumbnail != shown) drawListArt(thumbnail, m_listArtIsLogo);
+                }
+                drawListPlaytime(romData[currentRomIndex].second, menu);
                 m_prevRomSel    = currentRomIndex;
                 m_settlePending = true;                  // refresh art/footer once scrolling stops
                 m_needsRedraw   = true;
                 return;
             } else if (!m_settlePending) {
-
                 int rowY = baseY + (currentRomIndex - startIndex) * stepY;
                 drawRomRowSelected(cachedText(font, disp(romData[currentRomIndex].first),
                                    theme.getColor(Configuration::SEL_ITEM_FONT_COLOR)),
@@ -123,6 +133,53 @@ void RenderComponent::drawRomList(const std::string& folderName, const std::vect
             }
 
             m_settlePending = false;
+            if (refreshPageInfo(std::to_string(currentRomIndex + 1) + " / " + std::to_string(romData.size()),
+                                folderName, menu))
+                return;
+        } else if (!m_forceFull && !romData.empty() && m_prevRomSel >= 0
+                   && folderName == m_prevRomFolder && romData.size() == m_prevRomCount) {
+            int startX = theme.getIntValue(Configuration::GAME_LIST_X);
+            int baseY  = theme.getIntValue(Configuration::GAME_LIST_Y);
+            int stepY  = theme.getIntValue(Configuration::ITEMS_SEPARATION);
+            int clipWidth = theme.getIntValue("GENERAL.game_list_w");
+            int startIndex = listStartIndex(currentRomIndex, itemsPerPage, (int)romData.size());
+            const bool stars = menu == MENU_ROM || menu == MENU_SEARCH_RESULTS;
+            const int th = font ? TTF_FontHeight(font) : 0;
+            const int rr = std::max(6, th * 3 / 10);
+            for (int s = 0; s < itemsPerPage; s++) {
+                const int i = startIndex + s;
+                const int y = baseY + s * stepY;
+                if (stars) {
+                    SDL_Rect star = {(Sint16)(startX - 12 - 2 * rr - 3), (Sint16)(y + th / 2 - rr - 3),
+                                     (Uint16)(2 * rr + 6), (Uint16)(2 * rr + 6)};
+                    SDL_FillRect(screen, &star, bgFillColor());
+                    addDamage(star);
+                }
+                if (i >= (int)romData.size()) {
+                    drawRomRowUnselected(nullptr, startX, y, clipWidth);
+                    continue;
+                }
+                const bool sel = i == currentRomIndex;
+                SDL_Surface* text = cachedText(font, disp(romData[i].first),
+                                               theme.getColor(sel ? Configuration::SEL_ITEM_FONT_COLOR : Configuration::ITEMS_FONT_COLOR));
+                if (sel) { scrollPixelPosition = 0; selectTime = SDL_GetTicks(); drawRomRowSelected(text, startX, y, clipWidth); }
+                else     drawRomRowUnselected(text, startX, y, clipWidth);
+                if (stars && text && isFav(romData[i].second)) {
+                    int cx = startX - 12 - rr;
+                    if (cx - rr > 2) drawFavStar(cx, y + text->h / 2, rr, false);
+                }
+            }
+            if (!m_textOnly) {
+                SDL_Surface* shown = thumbnail;
+                requestThumbnail(romData[currentRomIndex].second, exactArt);
+                if (thumbnail != shown) drawListArt(thumbnail, m_listArtIsLogo);
+            }
+            drawListPlaytime(romData[currentRomIndex].second, menu);
+            m_prevRomSel = currentRomIndex;
+            m_settlePending = false;
+            if (refreshPageInfo(std::to_string(currentRomIndex + 1) + " / " + std::to_string(romData.size()),
+                                folderName, menu))
+                return;
         }
     }
 
@@ -191,6 +248,7 @@ void RenderComponent::drawRomList(const std::string& folderName, const std::vect
         requestThumbnail(romData[currentRomIndex].second, exactArt);
         drawListArt(thumbnail, m_listArtIsLogo);   // card behind baked wordmarks only
     }
+    drawListPlaytime(romData[currentRomIndex].second, menu);
 
     std::string pageInfo = std::to_string(currentRomIndex + 1) + " / " + std::to_string(romData.size());
 
@@ -295,9 +353,67 @@ std::string RenderComponent::getAlias(const std::string& title) {
     return applyTitleFilter(base);
 }
 
+static bool waitForVsync() {
+#if defined(__linux__) && defined(FBIO_WAITFORVSYNC)
+    static int fd = -2;
+    if (fd == -2) fd = open("/dev/fb0", O_RDWR | O_CLOEXEC);
+    if (fd < 0) return false;
+    __u32 arg = 0;
+    if (ioctl(fd, FBIO_WAITFORVSYNC, &arg) == 0) return true;
+    close(fd);
+    fd = -1;
+    bootMark("present: vsync not answered");
+#endif
+    return false;
+}
+
+void RenderComponent::flushSpans() {
+    if (m_spans.empty()) return;
+    if (!(m_fbFront->flags & SDL_HWSURFACE)) SDL_UpdateRects(m_fbFront, (int)m_spans.size(), m_spans.data());
+    m_spans.clear();
+}
+
+void RenderComponent::presentDamage(bool all) {
+    m_clipped.clear();
+    if (all) m_clipped.push_back({0, 0, (Uint16)screen->w, (Uint16)screen->h});
+    else for (const SDL_Rect& r : m_damage) {
+        const int x0 = std::max(0, (int)r.x), y0 = std::max(0, (int)r.y);
+        const int x1 = std::min(screen->w, (int)r.x + (int)r.w), y1 = std::min(screen->h, (int)r.y + (int)r.h);
+        if (x0 < x1 && y0 < y1) m_clipped.push_back({(Sint16)x0, (Sint16)y0, (Uint16)(x1 - x0), (Uint16)(y1 - y0)});
+    }
+    if (m_clipped.empty()) return;
+    int ymin = screen->h, ymax = 0, xmin = screen->w, xmax = 0;
+    for (const SDL_Rect& r : m_clipped) {
+        ymin = std::min(ymin, (int)r.y); ymax = std::max(ymax, r.y + r.h);
+        xmin = std::min(xmin, (int)r.x); xmax = std::max(xmax, r.x + r.w);
+    }
+    for (int y = ymin; y < ymax; y++) {
+        m_runs.clear();
+        for (const SDL_Rect& r : m_clipped)
+            if (y >= r.y && y < r.y + r.h) m_runs.push_back({r.x, r.x + r.w});
+        std::sort(m_runs.begin(), m_runs.end());
+        for (size_t i = 0; i < m_runs.size();) {
+            int x0 = m_runs[i].first, x1 = m_runs[i].second;
+            for (i++; i < m_runs.size() && m_runs[i].first <= x1; i++) x1 = std::max(x1, m_runs[i].second);
+            const size_t n = (size_t)(x1 - x0) * 4;
+            memcpy((Uint8*)m_fbFront->pixels + (size_t)y * m_fbFront->pitch + (size_t)x0 * 4,
+                   (const Uint8*)screen->pixels + (size_t)y * screen->pitch + (size_t)x0 * 4, n);
+        }
+    }
+    if (!(m_fbFront->flags & SDL_HWSURFACE))
+        m_spans.push_back({(Sint16)xmin, (Sint16)ymin, (Uint16)(xmax - xmin), (Uint16)(ymax - ymin)});
+}
+
 void RenderComponent::update() {
     if (!screen) return;
-    if (m_fbScreen) {
+    if (m_fbFront) {
+        if (!m_fullFrame && m_damage.empty()) return;
+        waitForVsync();
+        if (SDL_MUSTLOCK(m_fbFront)) SDL_LockSurface(m_fbFront);
+        presentDamage(m_fullFrame);
+        flushSpans();
+        if (SDL_MUSTLOCK(m_fbFront)) SDL_UnlockSurface(m_fbFront);
+    } else if (m_fbScreen) {
         // TATE: rotate the whole portrait surface into landscape fb0 each present
         rotateBlit90(screen, m_fbScreen, m_rotation);
         SDL_UpdateRect(m_fbScreen, 0, 0, 0, 0);

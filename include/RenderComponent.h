@@ -23,6 +23,7 @@
 #include <SDL/SDL_image.h>
 #include <SDL/SDL_rotozoom.h>
 #include <iostream>
+#include <fstream>
 #include "Configuration.h"
 #include "ILayout.h"
 #include "Settings.h"
@@ -33,6 +34,7 @@
 #include "crt_video.h"
 #include "crashlog.h"
 #include "fonts_data.h"
+#include "boot_timing.h"
 
 class RenderComponent {
 #ifdef HAS_PS1
@@ -44,6 +46,13 @@ public:
 
     SDL_Surface* m_fbScreen = nullptr;
     int          m_rotation = 0;
+    // the mapped framebuffer (or SDL's shadow) when drawing goes to a RAM screen
+    SDL_Surface* m_fbFront = nullptr;
+    std::vector<SDL_Rect> m_spans;
+    void flushSpans();
+    std::vector<SDL_Rect> m_clipped;
+    std::vector<std::pair<int,int>> m_runs;
+    void presentDamage(bool all);
     TTF_Font* font = nullptr;
     std::string  bgcolor;
 
@@ -181,6 +190,7 @@ protected:
     TTF_Font*   m_gridTitleFont = nullptr;
     std::string m_gridTitleText;
     int         m_gridTitleX = 0, m_gridTitleY = 0, m_gridTitleW = 0;
+    SDL_Rect    m_gridTitleStrip = {0, 0, 0, 0};
     bool        m_gridTitleScrolls = false;
     int         m_titleScroll = 0;
     Uint32      m_titleScrollTime = 0, m_titleScrollEnd = 0;
@@ -203,7 +213,10 @@ protected:
 
     bool   m_bgSettlePending = false;
     Uint32 m_bgSettleTime = 0;
+    Uint32 m_bgLastMove = 0;
     static const Uint32 BG_SETTLE_MS = 700;
+    static const Uint32 BG_SCROLL_GAP_MS = 150;     // moves closer than this are a held direction (50 ms repeats)
+    static const Uint32 BG_CACHED_SETTLE_MS = 150;
 
     bool   m_bgDecodePending = false;
 
@@ -360,9 +373,6 @@ protected:
     static std::unordered_map<std::string, std::string> aliasMap;
     static std::unordered_map<std::string, std::string> coreNameMap;   // names.txt
 
-    int space = 0;
-    int gDotCount = 0;
-
     void renderText(const std::string& text, Sint16 x, Sint16 y, SDL_Color color, int align = 0) {
         renderTextEx(font, text, x, y, color, align);
     }
@@ -414,8 +424,6 @@ public:
         scrollEndTime = 0;
 
         thumbnail = nullptr;
-        space = 0;
-        gDotCount = 0;
     }
 
     void loadFonts() {
@@ -504,6 +512,13 @@ public:
         }
 
 #if !defined(MACOS) && !defined(X86)
+        // after a core the host usually left our mode set
+        if (explicitRes && customVmode.empty()) {
+            std::ifstream fm("/sys/module/MiSTer_fb/parameters/mode");
+            int fmt = 0, rb = 0, fw = 0, fh = 0;
+            if (fm >> fmt >> rb >> fw >> fh && fmt == 8888 && fw == wantW && fh == wantH)
+                explicitRes = false;
+        }
         if (explicitRes) {
             char vmodeCmd[96];
             if (!customVmode.empty()) snprintf(vmodeCmd, sizeof(vmodeCmd), "%s", customVmode.c_str());
@@ -511,6 +526,10 @@ public:
             system(vmodeCmd);
             usleep(300000);   // let the scaler settle before SDL reads geometry
         }
+        bootMark(std::string("init: vmode ") + (explicitRes ? "ran" : "skipped"));
+        // input is evdev, no mouse probe needed
+        setenv("SDL_NOMOUSE", "1", 0);
+        setenv("SDL_FB_BROKEN_MODES", "1", 0);
 #endif
 
         {
@@ -522,6 +541,7 @@ public:
                 }
                 usleep(100000);
             }
+            bootMark("init: SDL_Init tries=" + std::to_string(sdlTries));
         }
 
         int resW, resH;
@@ -575,10 +595,12 @@ public:
             SDL_Quit();
             exit(EXIT_CONSOLE_QUIT);
         }
+        bootMark("init: SetVideoMode " + std::to_string(resW) + "x" + std::to_string(resH));
         // present must replace, never blend
         SDL_SetAlpha(screen, 0, SDL_ALPHA_OPAQUE);
 
         crt::init();
+        bootMark("init: crt");
         // TATE 1=CW 2=CCW: draw into a portrait surface, rotate-blit to landscape fb0 in update()
         m_rotation = crt::rotation();
 #if defined(MACOS) || defined(X86)
@@ -595,6 +617,27 @@ public:
                 screen = portrait;
             } else {
                 m_rotation = 0;
+            }
+        }
+        if (screen && !m_fbScreen && !crt::active() && screen->format->BytesPerPixel == 4) {
+            if (!(screen->flags & SDL_HWSURFACE)) {
+                if (SDL_Surface* hw = SDL_SetVideoMode(screen->w, screen->h, depth, SDL_HWSURFACE)) screen = hw;
+                else screen = SDL_SetVideoMode(resW, resH, depth, SDL_SWSURFACE);
+                if (!screen) {
+                    std::cerr << "Unable to set video mode: " << SDL_GetError() << std::endl;
+                    SDL_Quit();
+                    exit(EXIT_CONSOLE_QUIT);
+                }
+            }
+            const SDL_PixelFormat* pf = screen ? screen->format : nullptr;
+            SDL_Surface* back = pf ? SDL_CreateRGBSurface(SDL_SWSURFACE, screen->w, screen->h, 32,
+                                                          pf->Rmask, pf->Gmask, pf->Bmask, pf->Amask)
+                                   : nullptr;
+            if (back) {
+                SDL_SetAlpha(back, 0, SDL_ALPHA_OPAQUE);
+                SDL_SetAlpha(screen, 0, SDL_ALPHA_OPAQUE);
+                m_fbFront = screen;
+                screen = back;
             }
         }
         // push from the SDL shadow when there is one, the fb mmap reads back uncached
@@ -618,6 +661,7 @@ public:
         }
 
         loadFonts();
+        bootMark("init: fonts");
 
 #ifdef MACOS
         SDL_EnableKeyRepeat(SDL_DEFAULT_REPEAT_DELAY, SDL_DEFAULT_REPEAT_INTERVAL);
@@ -661,6 +705,8 @@ public:
     }
 
     virtual void drawCommonInfo(std::string pageInfo = "", std::string folderName = "", MenuLevel menu = MENU_NONE, bool footerOnly = false) = 0;
+    virtual bool refreshPageInfo(const std::string&, const std::string&, MenuLevel) { return false; }
+    virtual void drawListPlaytime(const std::string&, MenuLevel) {}
 
     bool   m_netUp = false;   // wlan has an IPv4 address
     bool   m_ethUp = false;   // eth has an IPv4 address
