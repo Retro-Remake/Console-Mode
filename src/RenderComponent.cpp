@@ -77,6 +77,7 @@ static void rotateBlit90(SDL_Surface* src, SDL_Surface* dst, int dir) {
 
 void RenderComponent::drawRomList(const std::string& folderName, const std::vector<std::pair<std::string, std::string>>& romData, int currentRomIndex,
                                   MenuLevel menu, bool useAlias, bool exactArt) {
+    if (drawThemed(folderName, romData, currentRomIndex, menu)) return;
     // folder names pass through as-is (getAlias would strip after a '/', e.g. "TI-99/4A")
     auto disp = [&](const std::string& s) -> std::string { return useAlias ? getAlias(s) : s; };
 
@@ -260,7 +261,7 @@ void RenderComponent::drawAppSettings(const std::string& settingsTitle, const st
     int bgWidth = menuBgWidth();
     int startX = (screenWidth - bgWidth)/2;
     int stepY = theme.getIntValue(Configuration::FOLDER_ITEMS_STEP) == 0 ? 50: theme.getIntValue(Configuration::FOLDER_ITEMS_STEP);
-    int startY0 = mainmenustartY;
+    int startY0 = menuStartY();
     int itemsPerPage = (screenHeight - startY0*2)/stepY;
     if (itemsPerPage <= 0) itemsPerPage = 9;
 
@@ -408,7 +409,10 @@ void RenderComponent::update() {
     if (!screen) return;
     if (m_fbFront) {
         if (!m_fullFrame && m_damage.empty()) return;
-        waitForVsync();
+        // small damage skips the vblank wait
+        size_t area = 0;
+        if (!m_fullFrame) for (const SDL_Rect& r : m_damage) area += (size_t)r.w * r.h;
+        if (m_fullFrame || area * 4 >= (size_t)screen->w * screen->h) waitForVsync();
         if (SDL_MUSTLOCK(m_fbFront)) SDL_LockSurface(m_fbFront);
         presentDamage(m_fullFrame);
         flushSpans();

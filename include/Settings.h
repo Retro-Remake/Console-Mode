@@ -142,6 +142,7 @@ public:
     void detach(ISettingsObserver *observer) override;
 
     virtual std::string getName() = 0;
+    virtual void refreshThemeRows() {}
 };
 
 class AppSettings : public Settings {
@@ -191,6 +192,9 @@ public:
                 updateClockFormat(false);
             } else if (currentKey == Configuration::ICON_SET) {
                 updateIconSet(false);
+            } else if (currentKey == Configuration::THEME_NAME || currentKey == Configuration::THEME_VARIANT
+                       || currentKey == Configuration::THEME_COLORS || currentKey == Configuration::THEME_FONTSIZE) {
+                updateTheme(false);
             } else if (currentKey == Configuration::BT_RECONNECT) {
                 updateBtReconnect(false);
             } else if (currentKey == Configuration::BT_REPAIR) {
@@ -247,6 +251,9 @@ public:
                 updateClockFormat(true);
             } else if (currentKey == Configuration::ICON_SET) {
                 updateIconSet(true);
+            } else if (currentKey == Configuration::THEME_NAME || currentKey == Configuration::THEME_VARIANT
+                       || currentKey == Configuration::THEME_COLORS || currentKey == Configuration::THEME_FONTSIZE) {
+                updateTheme(true);
             } else if (currentKey == Configuration::BT_RECONNECT) {
                 updateBtReconnect(true);
             } else if (currentKey == Configuration::BT_REPAIR) {
@@ -303,6 +310,9 @@ public:
     void updateButtonStyle(bool increase);
     void updateClockFormat(bool increase);
     void updateIconSet(bool increase);
+    void updateTheme(bool increase);
+    void refreshThemeRows() override;
+    std::vector<std::string> themeNames, themeVariants, themeColors, themeFontSizes;
     void updateBootTo(bool increase);
     void updateBtReconnect(bool increase);
     void updateBtRepair(bool increase);

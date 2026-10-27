@@ -23,7 +23,7 @@ static std::string defaultSettingLabel(const std::string& id) {
     static const std::unordered_map<std::string,std::string> kDefaults = {
         // App settings
         {"volume","Volume"}, {"net","Network"}, {"bluetooth","Bluetooth"},
-        {"bgColor","Background Color"}, {"bgArt","Background Artwork"}, {"showPlaytime","Show Playtime"}, {"selColor","Selection Color"}, {"gameStyle","Game Style"}, {"buttonStyle","Button Labels"}, {"clockFormat","Clock Format"}, {"iconSet","Category Icons"}, {"timezone","Time Zone"}, {"bootToGames","Boot To"}, {"btReconnect","BT Reconnect"}, {"btRePair","BT Re-Pair"}, {"screenRes","Console Mode Resolution"}, {"misterIniRes","MiSTer INI Resolution"}, {"misterIniHdr","MiSTer INI HDR"}, {"misterIniScandoubler","MiSTer INI Scandoubler"}, {"crtOverscan","CRT Overscan"}, {"crtFont","CRT Font"},
+        {"bgColor","Background Color"}, {"bgArt","Background Artwork"}, {"showPlaytime","Show Playtime"}, {"selColor","Selection Color"}, {"gameStyle","Game Style"}, {"buttonStyle","Button Labels"}, {"clockFormat","Clock Format"}, {"iconSet","Category Icons"}, {"esdeTheme","Theme"}, {"themeVariant","Theme Variant"}, {"themeColorScheme","Color Scheme"}, {"themeFontSize","Font Size"}, {"timezone","Time Zone"}, {"bootToGames","Boot To"}, {"btReconnect","BT Reconnect"}, {"btRePair","BT Re-Pair"}, {"screenRes","Console Mode Resolution"}, {"misterIniRes","MiSTer INI Resolution"}, {"misterIniHdr","MiSTer INI HDR"}, {"misterIniScandoubler","MiSTer INI Scandoubler"}, {"crtOverscan","CRT Overscan"}, {"crtFont","CRT Font"},
         {"loadConfig","System Config"}, {"updateTime","Set Time"}, {"clearcache","Rebuild Game Database"},
         {"update","Update"}, {"updateCM","Update Console Mode"}, {"scrapeArtwork","Scrape Artwork"}, {"optimizeArtwork","Optimize Artwork"}, {"importGamelist","Import gamelist.xml"}, {"manageHidden","Manage Hidden Games"}, {"hideSections","Hide Categories"},
         {"devtools","Developer Tools"}, {"quit","Quit"}, {"inputTester","Input Tester"}, {"kbMapping","Console Mode Keyboard Mapping"}, {"cdTester","CD Player"},
@@ -89,6 +89,10 @@ AppSettings::AppSettings(Configuration& cfg, Languages& languages,
         Configuration::SFX_CONFIRM,
         Configuration::SFX_BACK,
         Configuration::SFX_NAV,
+        Configuration::THEME_NAME,
+        Configuration::THEME_VARIANT,
+        Configuration::THEME_COLORS,
+        Configuration::THEME_FONTSIZE,
         Configuration::GAME_STYLE,
         Configuration::BUTTON_STYLE,
         Configuration::CLOCK_FORMAT,
@@ -638,6 +642,7 @@ void Settings::initializeSettings() {
     buttonStyles.push_back("PlayStation");
     buttonStyles.push_back("PlayStation Color");
     buttonStyles.push_back("PlayStation Gray");
+    buttonStyles.push_back("Theme");
 
     clockFormats.clear();
     clockFormats.push_back("24-Hour");
@@ -761,6 +766,7 @@ void Settings::initializeSettings() {
             (crtEnv && std::string(crtEnv) == "1") || getenv("CONSOLEMODE_SAFE_AREA");
     }
 
+    refreshThemeRows();
     enabledKeys = getEnabledKeys();
 
     currentIndex = 0;

@@ -58,7 +58,21 @@ public:
 
     enum GameStyle { GS_LIST, GS_GRID, GS_FLIX, GS_SS4 };   // list / grid / coverflow / PS4-row
 
-    GameStyle gameStyle() const { return m_textOnly ? GS_LIST : m_gameStyle; }
+    GameStyle gameStyle() const { return m_themeStyle >= 0 ? (GameStyle)m_themeStyle : m_textOnly ? GS_LIST : m_gameStyle; }
+    // a theme's main element on the current screen decides the style and grid size
+    int m_themeStyle = -1, m_themeCols = 0, m_themeRows = 0;
+    struct ThemeSystem { std::string id, fullName; int games = 0; int kind = 0; std::string icon; int favorites = 0; };   // kind 1 auto, 2 custom collection
+    std::vector<ThemeSystem> m_themeSystems;
+    ThemeSystem m_themeGameSystem;
+    void setThemeSystems(std::vector<ThemeSystem> s) { m_themeSystems = std::move(s); }
+    void setThemeGameSystem(const ThemeSystem& s) { m_themeGameSystem = s; }
+    std::vector<ThemeSystem> m_themeAllSystems;   // every system in every section, for preparing their images ahead
+    void setThemeAllSystems(std::vector<ThemeSystem> s) { m_themeAllSystems = std::move(s); }
+    virtual void setThemeScreen(MenuLevel) {}
+    virtual bool themeArtOn(const std::string&) const { return false; }
+    virtual std::string themeArt(const std::string&, const std::string&, const std::string&) { return std::string(); }
+    virtual void esdeConfigure() {}
+    virtual bool drawThemed(const std::string&, const std::vector<std::pair<std::string, std::string>>&, int, MenuLevel) { return false; }
     // {path, isBg}
     std::vector<std::pair<std::string,bool>> gamelistArtFiles() {
         std::vector<std::pair<std::string,bool>> out;
@@ -87,19 +101,20 @@ public:
                     : (v == "NX View" || v == "Flix View" || m_flixBig) ? GS_FLIX
                     : (v == "SS4") ? GS_SS4 : GS_LIST;
     }
-    int gridCols() const { return m_gridBig ? 3 : 5; }
+    int gridCols() const { return gameStyle() == GS_GRID && m_themeCols > 0 ? m_themeCols : m_gridBig ? 3 : 5; }
     bool m_flixBig = false;
-    int gridRows() const { return m_gridBig ? 2 : 3; }
+    int gridRows() const { return gameStyle() == GS_GRID && m_themeRows > 0 ? m_themeRows : m_gridBig ? 2 : 3; }
 
     void setTextOnly(bool b) { m_textOnly = b; }
     bool textOnly() const { return m_textOnly; }
 
-    enum ButtonStyle { BS_LETTERS, BS_LETTERS_COLOR, BS_PLAYSTATION, BS_PLAYSTATION_COLOR, BS_PLAYSTATION_GRAY };
+    enum ButtonStyle { BS_LETTERS, BS_LETTERS_COLOR, BS_PLAYSTATION, BS_PLAYSTATION_COLOR, BS_PLAYSTATION_GRAY, BS_THEME };
     void setButtonStyle(const std::string& v) {
         m_buttonStyle = (v == "PlayStation Gray")  ? BS_PLAYSTATION_GRAY
                       : (v == "PlayStation Color") ? BS_PLAYSTATION_COLOR
                       : (v == "PlayStation")       ? BS_PLAYSTATION
                       : (v == "ABXY Color")        ? BS_LETTERS_COLOR
+                      : (v == "Theme")             ? BS_THEME
                       : BS_LETTERS;
     }
     ButtonStyle buttonStyle() const { return m_buttonStyle; }
@@ -114,8 +129,11 @@ public:
     }
     virtual std::string applyTitleFilter(const std::string& name) const = 0;
     // ~88% of a 4:3 frame, clamped to the CRT safe area
-    int menuBgWidth() const {
-        int w = screenHeight * 4 * 88 / (3 * 100);
+    int menuStartY() const {
+        return theme.metricSet(Configuration::FOLDER_LIST_Y) ? theme.getIntValue(Configuration::FOLDER_LIST_Y) : mainmenustartY;
+    }
+        int menuBgWidth() const {
+        int w = theme.metricSet("GENERAL.menu_w") ? theme.getIntValue("GENERAL.menu_w") : screenHeight * 4 * 88 / (3 * 100);
         int safe = screenWidth - 2 * theme.marginX();
         return (safe > 0 && w > safe) ? safe : w;
     }
@@ -132,8 +150,8 @@ protected:
     bool m_favHint = true;
     TitleFilter m_titleFilter = TF_EXT;
 
-    SDL_Surface* imgBack;
-    SDL_Surface* imgBack2;
+    SDL_Surface* imgBack = nullptr;
+    SDL_Surface* imgBack2 = nullptr;
 
     TTF_Font* artFont = nullptr;
     TTF_Font* btnFont = nullptr;
@@ -166,7 +184,7 @@ protected:
 
     static const long ART_SOURCE_MAX_BYTES = 2L * 1024 * 1024;   // reject by source file size, not dimensions
 
-    struct ThumbReq    { std::string key, path; int w, h; bool exact; bool bg; };
+    struct ThumbReq    { std::string key, path; int w, h; bool exact; bool bg; int dim = 150; Uint32 tint = 0; };
     struct ThumbResult { std::string key; SDL_Surface* scaled; bool hasAlpha = false; };
     std::vector<std::thread> m_thumbThreads;
     std::mutex              m_thumbMutex;
@@ -285,6 +303,7 @@ protected:
 
     Uint32 bgFillColor() {
         Uint32 hex;
+        if (theme.colorOverride("background", hex)) return mapRgbHex(hex);
         if (parseHexColor(bgcolor, hex)) return mapRgbHex(hex);
         if (bgcolor == RED)    return mapRgbHex(0xcf3a1f);
         if (bgcolor == BLUE)   return mapRgbHex(0x3d5f93);
@@ -295,6 +314,7 @@ protected:
     }
 
     Uint32 selColor() {
+        { Uint32 themed; if (theme.colorOverride("selection", themed)) return mapRgbHex(themed); }
         Uint32 hex;
         if (parseHexColor(selcolor, hex)) return mapRgbHex(hex);
         if (selcolor == RED)    return mapRgbHex(0xff3030);
@@ -322,6 +342,9 @@ protected:
 
     Uint32 listCardColor() {
         Uint32 hex;
+        if (theme.colorOverride("card", hex)) return hex;
+        if (theme.colorOverride("background", hex))
+            return ((hex >> 16 & 0xff) * 3 / 5) << 16 | ((hex >> 8 & 0xff) * 3 / 5) << 8 | (hex & 0xff) * 3 / 5;
         if (parseHexColor(bgcolor, hex))
             return ((hex >> 16 & 0xff) * 3 / 5) << 16 | ((hex >> 8 & 0xff) * 3 / 5) << 8 | (hex & 0xff) * 3 / 5;
         if (bgcolor == RED)    return 0x7a2010;
@@ -336,6 +359,9 @@ protected:
     Uint32 scrollEndTime = 0;
     Uint32 selectTime = 0;
     static const Uint32 SCROLL_TIMEOUT = 2000;
+    Uint32 marqueeDelay() const { return (Uint32)(tNum("chrome.marquee.delay", SCROLL_TIMEOUT / 1000.0f) * 1000); }
+    Uint32 marqueePause() const { return (Uint32)(tNum("chrome.marquee.pause", END_SCROLL_PAUSE / 1000.0f) * 1000); }
+    int marqueeStep() const { return std::max(1, (int)tNum("chrome.marquee.speed", 1)); }
 
     bool m_needsRedraw = false;
 
@@ -418,6 +444,24 @@ public:
     RenderComponent(Configuration& cfg, ILayout& theme);
     virtual ~RenderComponent();
 
+    // theme property lookups by view.element.property
+    const ThemeProp* tProp(const char* key) const { return theme.prop(key); }
+    float tNum(const char* key, float def) const { const ThemeProp* p = tProp(key); return p && p->num ? p->a : def; }
+    int tX(const char* key, int def) const { const ThemeProp* p = tProp(key); return p && p->num ? (int)(p->a * screenWidth + 0.5f) : def; }
+    int tY(const char* key, int def) const { const ThemeProp* p = tProp(key); return p && p->num ? (int)(p->a * screenHeight + 0.5f) : def; }
+    int tY2(const char* key, int def) const { const ThemeProp* p = tProp(key); return p && p->num ? (int)(p->b * screenHeight + 0.5f) : def; }
+    SDL_Color tCol(const char* key, SDL_Color def) const {
+        const ThemeProp* p = tProp(key);
+        return p && p->color ? SDL_Color{(Uint8)(p->rgba >> 24), (Uint8)(p->rgba >> 16), (Uint8)(p->rgba >> 8), 0} : def;
+    }
+    Uint32 tRgb(const char* key, Uint32 def) const { const ThemeProp* p = tProp(key); return p && p->color ? p->rgba >> 8 : def; }
+    // only an RRGGBBAA value carries its own alpha
+    Uint8 tAlpha(const char* key, Uint8 def) const { const ThemeProp* p = tProp(key); return p && p->color && p->text.size() == 8 ? (Uint8)p->rgba : def; }
+    bool tVis(const char* key) const { const ThemeProp* p = tProp(key); return !p || p->text != "false"; }
+    std::string tStr(const char* key, const std::string& def) const { const ThemeProp* p = tProp(key); return p ? p->text : def; }
+    // element's fontSize, fraction of screen height
+    virtual TTF_Font* tFont(const char*, TTF_Font* def, bool = false) { return def; }
+
     void resetValues() {
         selectTime = SDL_GetTicks();
         scrollPixelPosition = 0;
@@ -426,7 +470,11 @@ public:
         thumbnail = nullptr;
     }
 
+    // view font swap, must be undone before fonts reload
+    virtual void restoreViewFont() {}
+
     void loadFonts() {
+        restoreViewFont();
         TTF_Font* olds[] = { font, artFont, btnFont, footerFont, headerFont,
                              settingsFont, titleFont, gridTitleFont, glyphFont };
         for (TTF_Font* o : olds) if (o) TTF_CloseFont(o);
@@ -437,7 +485,11 @@ public:
         m_cjkBySize.clear();
         m_fontPt.clear();
 
-        auto openBaked = [this](const std::string& id, int size) -> TTF_Font* {
+        auto openBaked = [this](const std::string& id, int size, const char* role = nullptr) -> TTF_Font* {
+            std::string themed = role ? theme.fontFile(role) : std::string();
+            if (themed.empty() && role) themed = theme.fontFile("ui");
+            if (!themed.empty())
+                if (TTF_Font* tf = TTF_OpenFont(themed.c_str(), size)) { m_fontPt[tf] = size; return tf; }
             const unsigned char* d = nullptr; std::size_t n = 0;
             if (!fontData(id, &d, &n) || !d || !n) return nullptr;
             SDL_RWops* rw = SDL_RWFromConstMem(d, (int)n);
@@ -461,20 +513,20 @@ public:
         const int  LEG_FONT_PCT = (screenWidth > 336) ? 75 : 95;   // hardware-tuned for 352 vs 320
         auto sz = [&](const char* k){ int s = theme.getIntValue(k); return legScale ? std::max(1, s * LEG_FONT_PCT / 100) : s; };
 
-        font = openBaked(uiFace, sz("GENERAL.font_size"));
+        font = openBaked(uiFace, sz("GENERAL.font_size"), "ui");
         if (font) { TTF_SetFontHinting(font, listHint); TTF_SetFontKerning(font, 1); }
-        artFont = openBaked(uiFace, sz("GENERAL.art_text_font_size"));
+        artFont = openBaked(uiFace, sz("GENERAL.art_text_font_size"), "ui");
         if (artFont) { TTF_SetFontHinting(artFont, uiHint); TTF_SetFontKerning(artFont, 1); }
-        btnFont = openBaked(uiFace, sz("GENERAL.btn_font_size"));
+        btnFont = openBaked(uiFace, sz("GENERAL.btn_font_size"), "ui");
         if (btnFont) { TTF_SetFontHinting(btnFont, uiHint); TTF_SetFontKerning(btnFont, 1); }
-        footerFont = openBaked(uiFace, sz("GENERAL.footer_font_size"));
+        footerFont = openBaked(uiFace, sz("GENERAL.footer_font_size"), "ui");
         if (footerFont) { TTF_SetFontHinting(footerFont, uiHint); TTF_SetFontKerning(footerFont, 1); }
-        headerFont = openBaked(uiFace, sz("GENERAL.header_font_size"));
+        headerFont = openBaked(uiFace, sz("GENERAL.header_font_size"), "ui");
         if (headerFont) { TTF_SetFontHinting(headerFont, uiHint); TTF_SetFontKerning(headerFont, 1); }
 
-        settingsFont = openBaked(boldFace, sz("GENERAL.settings_font_size"));
-        titleFont     = openBaked(boldFace, sz("GENERAL.title_font_size"));
-        gridTitleFont = openBaked(boldFace, sz("GENERAL.grid_title_font_size"));
+        settingsFont = openBaked(boldFace, sz("GENERAL.settings_font_size"), "bold");
+        titleFont     = openBaked(boldFace, sz("GENERAL.title_font_size"), "bold");
+        gridTitleFont = openBaked(boldFace, sz("GENERAL.grid_title_font_size"), "bold");
         if (settingsFont) TTF_SetFontHinting(settingsFont, boldHint);
         if (titleFont)     TTF_SetFontHinting(titleFont,     boldHint);
         if (gridTitleFont) TTF_SetFontHinting(gridTitleFont, boldHint);
@@ -492,6 +544,7 @@ public:
         m_psGlyphCache.clear();
         m_gridTitleFont = nullptr;
         m_gridTitleScrolls = false;
+        if (imgBack) loadBackBars();
     }
 
     void initialize() {
@@ -512,7 +565,6 @@ public:
         }
 
 #if !defined(MACOS) && !defined(X86)
-        // after a core the host usually left our mode set
         if (explicitRes && customVmode.empty()) {
             std::ifstream fm("/sys/module/MiSTer_fb/parameters/mode");
             int fmt = 0, rb = 0, fw = 0, fh = 0;
@@ -527,7 +579,6 @@ public:
             usleep(300000);   // let the scaler settle before SDL reads geometry
         }
         bootMark(std::string("init: vmode ") + (explicitRes ? "ran" : "skipped"));
-        // input is evdev, no mouse probe needed
         setenv("SDL_NOMOUSE", "1", 0);
         setenv("SDL_FB_BROKEN_MODES", "1", 0);
 #endif
@@ -671,37 +722,25 @@ public:
 
         SDL_ShowCursor(SDL_DISABLE);
 
+        loadBackBars();
+    }
+
+    // selection bar and help glyph sizes follow the list and button fonts
+    void loadBackBars() {
+        restoreViewFont();
         std::string imgPath = cfg.get(Configuration::HOME_PATH) + "ConsoleMode/themeconfig/resources/back22.png";
-        imgBack = IMG_Load(imgPath.c_str());
-        if (!imgBack) {
-            std::cerr << "Unable to load imgBack" << std::endl;
-            imgBack = SDL_CreateRGBSurface(SDL_SWSURFACE, 8, 8, 32, 0, 0, 0, 0);   // never NULL
-        }
-
-        int imgHeight = imgBack ? imgBack->h : 8;
-        int fontSize = theme.getIntValue("GENERAL.font_size");
-        double imgSize = fontSize*1.5;
-        double scale = imgSize/imgHeight;
-
-        {
-            SDL_Surface* z = zoomSurface(imgBack, scale, scale, SMOOTHING_ON);
-            if (z) { SDL_FreeSurface(imgBack); imgBack = z; }
-        }
-
-        imgPath = cfg.get(Configuration::HOME_PATH) + "ConsoleMode/themeconfig/resources/back22.png";
-        imgBack2 = IMG_Load(imgPath.c_str());
-        if (!imgBack2) {
-            std::cerr << "Unable to load imgBack2" << std::endl;
-            imgBack2 = SDL_CreateRGBSurface(SDL_SWSURFACE, 8, 8, 32, 0, 0, 0, 0);   // never NULL
-        }
-
-        fontSize = theme.getIntValue("GENERAL.btn_font_size");
-        imgSize = fontSize*1.5;
-        scale = imgSize/imgHeight;
-        {
-            SDL_Surface* z = zoomSurface(imgBack2, scale, scale, SMOOTHING_ON);
-            if (z) { SDL_FreeSurface(imgBack2); imgBack2 = z; }
-        }
+        auto load = [&](SDL_Surface*& dst, double h) {
+            if (dst) SDL_FreeSurface(dst);
+            dst = IMG_Load(imgPath.c_str());
+            if (!dst) {
+                std::cerr << "Unable to load " << imgPath << std::endl;
+                dst = SDL_CreateRGBSurface(SDL_SWSURFACE, 8, 8, 32, 0, 0, 0, 0);   // never NULL
+            }
+            double scale = h / dst->h;
+            if (SDL_Surface* z = zoomSurface(dst, scale, scale, SMOOTHING_ON)) { SDL_FreeSurface(dst); dst = z; }
+        };
+        load(imgBack, theme.metricSet("GENERAL.sel_bar_h") ? theme.getIntValue("GENERAL.sel_bar_h") : theme.getIntValue("GENERAL.font_size") * 1.5);
+        load(imgBack2, theme.getIntValue("GENERAL.btn_font_size") * 1.5);
     }
 
     virtual void drawCommonInfo(std::string pageInfo = "", std::string folderName = "", MenuLevel menu = MENU_NONE, bool footerOnly = false) = 0;

@@ -88,6 +88,10 @@ public:
     static const std::string BG_COLOR;
     static const std::string BG_ART;
     static const std::string SHOW_PLAYTIME;
+    static const std::string THEME_NAME;
+    static const std::string THEME_VARIANT;
+    static const std::string THEME_COLORS;
+    static const std::string THEME_FONTSIZE;
     static const std::string SEL_COLOR;
     static const std::string CONTROLS;
     static const std::string INPUT_TESTER;

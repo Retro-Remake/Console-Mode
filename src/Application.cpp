@@ -24,6 +24,7 @@
 #include <SDL/SDL_ttf.h>
 #include "Application.h"
 #include "IniSafe.h"
+#include "BootStatus.h"
 #include "UpdateManager.h"
 #include "boot_timing.h"
 #include "cpu_diag.h"
@@ -80,6 +81,7 @@ using namespace appdetail;
 void Application::drawCurrentState() {
 
     renderComponent.clearRedrawFlag();
+    setThemeContext();
 
     static MenuLevel s_prevDrawLevel = MENU_NONE;
     if (state.currentMenuLevel != s_prevDrawLevel) {
@@ -246,15 +248,19 @@ void Application::drawCurrentState() {
 
             RenderComponent::GameStyle gs = renderComponent.gameStyle();
             std::vector<std::pair<std::string,std::string>> cells;
-            for (Section& section : sections) {
-                cells.push_back({section.displayName(),
-                                 sectionGroupIcon(cfg, lowerCopy(section.getGroupname()))});
-            }
+            const bool themedArt = renderComponent.themeArtOn("sections");
+            for (Section& section : sections) cells.push_back({section.displayName(), sectionIcon(section)});
 
             {
                 bool drawsBg = (gs == RenderComponent::GS_FLIX || gs == RenderComponent::GS_SS4 || gs == RenderComponent::GS_GRID);
                 std::string sg = cfg.get(Configuration::HOME_PATH) + "ConsoleMode/themeconfig/section_groups/";
-                if (sections.empty() || !drawsBg) renderComponent.requestSystemBgDir("");
+                // a themed screen never shows the built-in system background, so don't load it
+                const std::string themedBg = themedArt && !sections.empty()
+                    ? renderComponent.themeArt("sections.background", lowerCopy(sections[state.currentSectionIndex].getGroupname()),
+                                               sections[state.currentSectionIndex].displayName())
+                    : std::string();
+                if (sections.empty() || !drawsBg || renderComponent.esdeOn()) renderComponent.requestSystemBgDir("");
+                else if (!themedBg.empty()) renderComponent.requestSystemBgFile(themedBg, "sections.background");
                 else renderComponent.requestSystemBgBase(
                     sg + lowerCopy(sections[state.currentSectionIndex].getGroupname()) + "-BG", sg + "Main-BG");
             }
@@ -440,23 +446,36 @@ void Application::drawCurrentState() {
 
             {
                 auto& fr = folders[state.currentFolderIndex].getRoms();
-                if (isList || fr.empty()) renderComponent.requestSystemBgDir("");
+                std::string themedBg;
+                if (renderComponent.themeArtOn("systems")) {
+                    const RenderComponent::ThemeSystem ts = themeSystem(folders[state.currentFolderIndex].getTitle(), 0);
+                    themedBg = renderComponent.themeArt("systems.background", RCArtwork::esdeSystemId(ts.id), ts.fullName);
+                }
+                if (isList || renderComponent.esdeOn()) renderComponent.requestSystemBgDir("");
+                else if (!themedBg.empty()) renderComponent.requestSystemBgFile(themedBg, "systems.background");
+                else if (fr.empty()) renderComponent.requestSystemBgDir("");
                 else renderComponent.requestSystemBg(fr[0].getPath());
             }
 
+            // a theme can list the systems in its own order, the cursor stays on the same folder
+            const std::vector<int> order = themeFolderOrder(section);
             std::vector<std::pair<std::string,std::string>> cells;
-            for (Folder& folder : folders)
+            int shown = state.currentFolderIndex;
+            for (size_t i = 0; i < order.size(); i++) {
+                Folder& folder = folders[order[i]];
                 cells.push_back({systemDisplayName(folder.getTitle()), systemLogoPath(folder, isList)});
+                if (order[i] == state.currentFolderIndex) shown = (int)i;
+            }
 
             std::string sectionName = "Load Game / " + section.displayName();
             if (gs == RenderComponent::GS_FLIX)
-                renderComponent.drawFlix(sectionName, cells, state.currentFolderIndex, MENU_FOLDER);
+                renderComponent.drawFlix(sectionName, cells, shown, MENU_FOLDER);
             else if (gs == RenderComponent::GS_SS4)
-                renderComponent.drawSS4(sectionName, cells, state.currentFolderIndex, MENU_FOLDER);
+                renderComponent.drawSS4(sectionName, cells, shown, MENU_FOLDER);
             else if (gs == RenderComponent::GS_GRID)
-                renderComponent.drawGrid(sectionName, cells, state.currentFolderIndex, MENU_FOLDER);
+                renderComponent.drawGrid(sectionName, cells, shown, MENU_FOLDER);
             else
-                renderComponent.drawFolderEx(sectionName, cells, state.currentFolderIndex);
+                renderComponent.drawFolderEx(sectionName, cells, shown);
 
             break;
         }
@@ -494,35 +513,49 @@ void Application::drawCurrentState() {
         }
         case MENU_ROM:
         {
-            std::vector<std::pair<std::string, std::string>> romData;
             std::vector<Rom>* roms = getCurrentRomList();
-
-            std::set<std::string> favLaunch, favParents;
-            for (auto& f : vecFavoritesFile) {
-                favLaunch.insert(f.getPath());
-                // lazy folders can't resolve a launch path yet so match by parent dir
-                const std::string& p = f.getPath();
-                size_t s = p.find_last_of('/');
-                if (s != std::string::npos) favParents.insert(p.substr(0, s));
-            }
-            std::set<std::string> favCells;
-            if (roms) {
-                for (Rom& rom : *roms)
-                {
-                    std::string title = rom.getTitle();
-                    if (displaysAsFolder(rom))
-                        title += " [DIR]";
-                    romData.push_back({title, rom.getPath()});
-                    if (!favLaunch.empty()) {
-                        std::string lp = resolveLaunchPathForRom(rom);
-                        if (favLaunch.count(rom.getPath())) favCells.insert(rom.getPath());   // folder favorite
-                        else if (!lp.empty() && favLaunch.count(lp)) favCells.insert(rom.getPath());
-                        else if (rom.IsFolder() && rom.isLazy() && favParents.count(rom.getPath()))
-                            favCells.insert(rom.getPath());
+            // the list only changes on non-navigation commands or when the folder's contents change
+            const bool modelFresh = roms && m_romModel.roms == roms && m_romModel.count == roms->size()
+                && m_romModel.favs == vecFavoritesFile.size() && m_romModel.gen == m_modelGen
+                && (roms->empty() || (m_romModel.first == roms->front().getPath() && m_romModel.last == roms->back().getPath()));
+            if (!modelFresh) {
+                std::vector<std::pair<std::string, std::string>> romData;
+                std::set<std::string> favLaunch, favParents;
+                for (auto& f : vecFavoritesFile) {
+                    favLaunch.insert(f.getPath());
+                    // lazy folders can't resolve a launch path yet so match by parent dir
+                    const std::string& p = f.getPath();
+                    size_t s = p.find_last_of('/');
+                    if (s != std::string::npos) favParents.insert(p.substr(0, s));
+                }
+                std::set<std::string> favCells;
+                if (roms) {
+                    for (Rom& rom : *roms)
+                    {
+                        std::string title = rom.getTitle();
+                        if (displaysAsFolder(rom))
+                            title += " [DIR]";
+                        romData.push_back({title, rom.getPath()});
+                        if (!favLaunch.empty()) {
+                            std::string lp = resolveLaunchPathForRom(rom);
+                            if (favLaunch.count(rom.getPath())) favCells.insert(rom.getPath());   // folder favorite
+                            else if (!lp.empty() && favLaunch.count(lp)) favCells.insert(rom.getPath());
+                            else if (rom.IsFolder() && rom.isLazy() && favParents.count(rom.getPath()))
+                                favCells.insert(rom.getPath());
+                        }
                     }
                 }
+                m_romModel.romData = std::move(romData);
+                m_romModel.favCells = std::move(favCells);
+                m_romModel.roms = roms;
+                m_romModel.count = roms ? roms->size() : 0;
+                m_romModel.favs = vecFavoritesFile.size();
+                m_romModel.gen = m_modelGen;
+                m_romModel.first = roms && !roms->empty() ? roms->front().getPath() : std::string();
+                m_romModel.last = roms && !roms->empty() ? roms->back().getPath() : std::string();
             }
-            renderComponent.setFavoritePaths(std::move(favCells));
+            const std::vector<std::pair<std::string, std::string>>& romData = m_romModel.romData;
+            renderComponent.setFavoritePaths(m_romModel.favCells);
 
             std::string name = getCurrentRomListTitle();
             if (state.currentRomIndex<0||state.currentRomIndex>=romData.size()) state.currentRomIndex = 0;
@@ -897,6 +930,8 @@ void Application::drawCurrentState() {
             renderComponent.forceFullRedraw();
             m_dirty = true;
         }
+        else if (m_tipBootHint)
+            renderComponent.drawBootHint(strtip);
         else
             renderComponent.showTip(strtip);
     }
@@ -908,7 +943,14 @@ static void onQuitSignal(int) { g_quitSignal = 1; }
 #endif
 
 void Application::handleCommand(ControlMap cmd) {
+    if (cmd != CMD_NONE && !m_bootHintShown && renderComponent.bootStarting()) {
+        m_bootHintShown = true;
+        SetTip(renderComponent.tStr("chrome.bootHint.text", "Still starting up, menus may be slow"), 4000);
+        m_tipBootHint = true;
+    }
     m_dirty = true;
+    if (cmd != CMD_UP && cmd != CMD_DOWN && cmd != CMD_LEFT && cmd != CMD_RIGHT) m_modelGen++;
+    setThemeContext();
     // CRT 180deg flips the whole frame so invert the d-pad to match the tube
     if (crt::rotation() == 3) {
         switch (cmd) {
@@ -968,6 +1010,8 @@ void Application::handleCommand(ControlMap cmd) {
 
     switch (state.currentMenuLevel) {
         case MenuLevel::MENU_MAIN:
+            // a theme's tile row runs left to right
+            if (renderComponent.mainTiles()) { if (cmd == CMD_LEFT) cmd = CMD_UP; else if (cmd == CMD_RIGHT) cmd = CMD_DOWN; }
             if (cmd == CMD_ENTER) {
                 handleMainMenu(state.currentMainIndex);
                 return;
@@ -1487,9 +1531,14 @@ void Application::handleCommand(ControlMap cmd) {
                 renderComponent.resetValues();
             } else if (cmd == CMD_UP || cmd == CMD_DOWN || cmd == CMD_LEFT || cmd == CMD_RIGHT) {
                 int n = (int)folders.size();
-                if (n > 0)
-                    state.currentFolderIndex = styleMoveIndex(cmd, state.currentFolderIndex,
-                        n, renderComponent.gameStyle(), theme.getIntValue(Configuration::ITEMS), renderComponent.gridCols());
+                if (n > 0) {
+                    const std::vector<int> order = themeFolderOrder(section);
+                    int pos = 0;
+                    for (int i = 0; i < n; i++) if (order[i] == state.currentFolderIndex) pos = i;
+                    pos = styleMoveIndex(cmd, pos, n, renderComponent.gameStyle(),
+                                         theme.getIntValue(Configuration::ITEMS), renderComponent.gridCols());
+                    state.currentFolderIndex = order[pos];
+                }
             } else if (cmd == CMD_OPTIONS){
 
                 currentCoreIndex = 0;
@@ -3154,7 +3203,6 @@ void Application::run() {
             Uint32 MOD_MS = 3000;           // Moderate minimum hold
             Uint32 CAP_MS = std::max(SLOW_MS, MOD_MS) + 10000;   // never gate longer than this
             bool slow = (bootSpeed == "Safest" || bootSpeed == "Slow");
-            // warm return: only wait on decode
             const bool warm = renderComponent.iconsWarm();
             int total = renderComponent.thumbPreloadCount();
             Uint32 gateStart = SDL_GetTicks();
@@ -3245,6 +3293,14 @@ void Application::run() {
             }
         }
 #endif
+        {
+            const bool starting = bootstatus::starting((int)renderComponent.thumbWorkPending());
+            if (starting != renderComponent.bootStarting()) {
+                renderComponent.setBootStarting(starting);
+                bootMark(starting ? "startup indicator on" : "startup indicator settled");
+                m_dirty = true;
+            }
+        }
         // a pre-2023 clock fails every TLS cert so kick NTP instead of spending an attempt
         { static int s_cmTries = 0; static Uint32 s_cmNext = 6000;
           if ((SDL_GetTicks() - runStartMs) > s_cmNext && !cmupdate::checkSettled() &&
@@ -3682,7 +3738,6 @@ void Application::run() {
         const Uint32 nowRepaint = SDL_GetTicks();
         const bool startupRepaint = (nowRepaint - runStartMs) < 5000 && (nowRepaint - s_lastStartupRepaint) >= 500;
         if (startupRepaint) s_lastStartupRepaint = nowRepaint;
-        // tips blend over the screen and need a clean repaint under them
         const bool tipExpired = tipStartTime > 0 && (int)(nowRepaint - tipStartTime) > m_tipDurationMs;
         const bool tipRepaint = tipStartTime > 0 && (m_dirty || tipExpired);
         const bool statusScreen =
@@ -3695,7 +3750,9 @@ void Application::run() {
         static Uint32 s_lastStatusRepaint = 0;
         const bool statusRepaint = statusScreen && (m_dirty || nowRepaint - s_lastStatusRepaint >= 250);
         if (statusRepaint) s_lastStatusRepaint = nowRepaint;
-        if (tipRepaint || statusRepaint || startupRepaint)
+        // a themed screen redraws the tip band itself, so a tip doesn't force full frames
+        const bool tipFull = tipRepaint && !renderComponent.esdeOn();
+        if (tipFull || statusRepaint || startupRepaint)
             renderComponent.forceFullRedraw();
 
         bool needRender = m_dirty || tipRepaint || statusRepaint ||
@@ -3707,7 +3764,7 @@ void Application::run() {
         const bool animDue = renderComponent.needsContinuousRedraw() && nowRepaint - s_lastFrameRender >= frameDelay;
         const bool anyRender = needRender || animDue || bgAdopted;
         if (anyRender) s_lastFrameRender = nowRepaint;
-        if (anyRender && tipStartTime > 0 && !tipRepaint) renderComponent.forceFullRedraw();
+        if (anyRender && tipStartTime > 0 && !tipRepaint && !renderComponent.esdeOn()) renderComponent.forceFullRedraw();
         if (anyRender) {
             struct timespec _t0, _t1, _t2;
             clock_gettime(CLOCK_MONOTONIC, &_t0);
@@ -3750,6 +3807,8 @@ void Application::run() {
               if (shot && ready) { renderComponent.saveScreenshot(shot); isRunning = false; } }
 #endif
         } else if (thumbDrew) {
+            renderComponent.update();
+        } else if (renderComponent.tickBootSpinner()) {
             renderComponent.update();
         }
         // boot instrumentation: one-shot milestones + 500ms samples for the first 30s
@@ -3948,6 +4007,11 @@ void Application::settingsChanged(const std::string& key, const std::string& val
         bool cfgChanged = (cfg.get(key) != value);
         cfg.set(key, value);
         if (cfgChanged) cfg.saveConfigIni();
+    }
+
+    if (m_fontsReady && (key == Configuration::THEME_NAME || key == Configuration::THEME_VARIANT
+                         || key == Configuration::THEME_COLORS || key == Configuration::THEME_FONTSIZE)) {
+        applyThemeSetting(key);
     }
 
     if (key == Configuration::HISTORY_SIZE) {
