@@ -563,6 +563,16 @@ public:
             const char* crtEnv = getenv("CONSOLEMODE_CRT");
             if (crtEnv && std::string(crtEnv) == "1") explicitRes = false;
         }
+        // direct video: the host doubles a 240p/288p fb across 640, 480i/576i shows 1:1
+        if (const char* dvEnv = getenv("CONSOLEMODE_DV")) {
+            int lines = atoi(dvEnv);
+            if (lines > 0) {
+                wantW = lines < 300 ? 320 : 640;
+                wantH = lines;
+                customVmode.clear();
+                explicitRes = true;
+            }
+        }
 
 #if !defined(MACOS) && !defined(X86)
         if (explicitRes && customVmode.empty()) {

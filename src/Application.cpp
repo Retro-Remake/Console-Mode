@@ -3133,6 +3133,7 @@ void Application::run() {
 
     int fps = 0;
     int frameCount = 0;
+    bool drewFrame = false;
     Uint32 fpsTimer = 0;
 
     Uint32 frameStart = 0;
@@ -3315,6 +3316,27 @@ void Application::run() {
                   s_cmTries++;
                   s_cmNext += (s_cmTries < 6) ? 30000 : 300000;
                   cmupdate::startCheck(cfg.getBool(Configuration::USE_MIRROR));
+              }
+          } }
+
+        // a boot-mounted CIFS share can land after the menu is built
+        { static int s_cifsWatch = -1; static Uint32 s_cifsNext = 0;
+          if (s_cifsWatch < 0) s_cifsWatch = cifsMountPending() ? 1 : 0;
+          if (s_cifsWatch == 1 && SDL_GetTicks() >= s_cifsNext) {
+              s_cifsNext = SDL_GetTicks() + 1000;
+              if (!cifsMountPending()) {
+                  s_cifsWatch = 0;
+                  if (!cifsShareMounted()) {
+                      logMessage(INFO, "cifs", "share not mounted within the boot window");
+                  } else if (cifsDeferredCache) {
+                      cifsDeferredCache = false;
+                      rebuildGameDatabase();
+                      m_dirty = true;
+                  } else {
+                      reloadMenuTree();
+                      SetTip("Network share mounted, game list updated.");
+                      m_dirty = true;
+                  }
               }
           } }
 
@@ -3765,6 +3787,9 @@ void Application::run() {
         const bool anyRender = needRender || animDue || bgAdopted;
         if (anyRender) s_lastFrameRender = nowRepaint;
         if (anyRender && tipStartTime > 0 && !tipRepaint && !renderComponent.esdeOn()) renderComponent.forceFullRedraw();
+        // drawn and up 5s, disarm the update rollback
+        { static bool s_healthy = false;
+          if (!s_healthy && drewFrame && nowRepaint - runStartMs >= 5000) { s_healthy = true; cmupdate::updateHealthy(); } }
         if (anyRender) {
             struct timespec _t0, _t1, _t2;
             clock_gettime(CLOCK_MONOTONIC, &_t0);
@@ -3781,13 +3806,11 @@ void Application::run() {
             if (_pUs > perfPresentMaxUs) perfPresentMaxUs = _pUs;
             perfRenderedFrames++;
             frameCount++;
+            drewFrame = true;
             if (bgmPendingStart) {
                 bgmPendingStart = false;
                 bgmStartIfConfigured(cfg);
             }
-            // after 100 rendered frames the new binary is good, disarm the rollback
-            { static long s_healthFrames = 0;
-              if (++s_healthFrames == 100) cmupdate::updateHealthy(); }
             m_dirty = false;
 #ifdef MACOS
             // mac: $CONSOLEMODE_SHOT writes a BMP then exits
