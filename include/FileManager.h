@@ -12,6 +12,7 @@
 struct FileItem{
     std::string fileName;
     bool isFolder;
+    bool gameFolder = false;   // one game's files, sorts among the games
 };
 
 class FileManager {

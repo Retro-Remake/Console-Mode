@@ -316,6 +316,7 @@ void RenderComponent::loadAliases() {
         if (pos != std::string::npos) {
             std::string filename = line.substr(0, pos);
             std::string alias = line.substr(pos + 1);
+            if (!alias.empty() && alias.back() == '\r') alias.pop_back();
             aliasMap[filename] = alias;
         }
     }
@@ -338,7 +339,7 @@ std::string RenderComponent::getAlias(const std::string& title) {
     if (dot != std::string::npos) noExt.erase(dot);
     auto it = aliasMap.find(noExt);
     // romset names carry (...) junk
-    if (it != aliasMap.end()) return applyTitleFilter(it->second);
+    if (it != aliasMap.end()) return applyTitleFilter(it->second, false);
     auto cn = coreNameMap.find(noExt);
     if (cn != coreNameMap.end()) return cn->second;
     // keep the datecode visible
@@ -426,10 +427,17 @@ void RenderComponent::update() {
     } else if (!m_damage.empty()) {
         SDL_UpdateRects(screen, (int)m_damage.size(), m_damage.data());
     }
+    // the CRT scanout copies only the rows that changed
+    const bool pushAll = m_fullFrame || m_fbScreen;
+    int y0 = 0, y1 = 0;
+    if (!pushAll && !m_damage.empty()) {
+        y0 = screen->h; y1 = 0;
+        for (const SDL_Rect& r : m_damage) { y0 = std::min<int>(y0, r.y); y1 = std::max<int>(y1, r.y + r.h); }
+    }
     m_fullFrame = false;
     m_damage.clear();
     // mirror fb0 into the FPGA DDR scanout, no-op unless CONSOLEMODE_CRT=1
-    crt::pushFrame();
+    crt::pushFrame(pushAll, y0, y1);
 }
 
 std::unordered_map<std::string, std::string> RenderComponent::aliasMap;

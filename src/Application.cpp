@@ -819,16 +819,24 @@ void Application::drawCurrentState() {
         case MENU_JOY_TESTER:
         {
 
-            std::vector<bool> lit(12, false);
+            // 0..11 the main buttons, 12..15 L2 R2 L3 R3
+            std::vector<bool> lit(16, false);
             for (int i = 0; i < 12; i++) {
                 int code = JsMapper.buttonCode(i);
                 if (code && m_joyPressed.count(code)) lit[i] = true;
+            }
+            float trigFill[2] = { m_joyTrig[0], m_joyTrig[1] };
+            for (int n = 0; n < 4; n++) {
+                const int code = JsMapper.extCode(n);
+                if (code > KEY_MAX) { if (n < 2 && m_joyTrig[n] >= 0.75f) lit[12 + n] = true; }
+                else if (code && m_joyPressed.count(code)) lit[12 + n] = true;
+                if (n < 2 && lit[12 + n] && code <= KEY_MAX) trigFill[n] = 1.0f;
             }
             if (m_joyHatX < 0) lit[1] = true;  else if (m_joyHatX > 0) lit[0] = true;   // Left / Right
             if (m_joyHatY < 0) lit[3] = true;  else if (m_joyHatY > 0) lit[2] = true;   // Up / Down
             std::string dev = (currentJoystickIndex < (int)JsMapper.getVecDevices().size())
                 ? JsMapper.getVecDevices()[currentJoystickIndex].name : std::string();
-            renderComponent.drawJoyTester(lit, dev);
+            renderComponent.drawJoyTester(lit, dev, m_joyAxis, trigFill);
 
             if (m_joyEscSince && SDL_GetTicks() - m_joyEscSince >= 3000) {
                 state.currentMenuLevel = MenuLevel::MENU_CONTROLS_JOY;
@@ -1869,6 +1877,7 @@ void Application::handleCommand(ControlMap cmd) {
             if (cmd == CMD_BACK) {
                 if (leaveRomFolder()) {
                     renderComponent.resetValues();
+                    renderComponent.forceFullRedraw();
                 } else {
                     resetRomFolderNavigation();
 
@@ -1891,8 +1900,11 @@ void Application::handleCommand(ControlMap cmd) {
                     return;
 
                 if (rom->IsFolder() && !rom->IsCue()) {
-                    if (enterSelectedRomFolder())
+                    if (enterSelectedRomFolder()) {
                         logMessage(INFO,"MENU_ROM","enter folder");
+                        // incremental views don't key on the folder
+                        renderComponent.forceFullRedraw();
+                    }
                     else if (rom->IsCue())
                         launchRom();   // lazy folder collapsed to a single CD game so launch it now
                 } else {
@@ -2853,6 +2865,10 @@ void Application::handleCommand(ControlMap cmd) {
                         m_joyTesterVid = m_joyTesterPid = 0;
                         sscanf(d.vid_pid.c_str(), "%hx_%hx", &m_joyTesterVid, &m_joyTesterPid);
                         m_joyPressed.clear(); m_joyHatX = 0; m_joyHatY = 0; m_joyEscSince = 0;
+                        for (auto& h : m_joyEscHeld) h = 0;
+                        for (auto& a : m_joyAxis) a = 0;
+                        m_joyTrig[0] = m_joyTrig[1] = 0;
+                        m_joyAxisLayout = -1;
                         state.currentMenuLevel = MenuLevel::MENU_JOY_TESTER;
                         renderComponent.forceFullRedraw();
                         m_dirty = true;
@@ -3246,7 +3262,12 @@ void Application::run() {
     loadUsbRom();
     bootMark("loadUsbRom");
 
-    {
+    // Boot To only at power-on, /tmp clears on reboot
+    static const char* kBootToMark = "/tmp/consolemode/boot_to_done";
+    std::error_code bootEc;
+    const bool coldStart = !std::filesystem::exists(kBootToMark, bootEc);
+    if (coldStart) {
+        std::ofstream(kBootToMark) << "1\n";
         const std::string bootTo = cfg.get(Configuration::BOOT_TO_GAMES);
         if (bootTo == "true" || bootTo == "Load Game") {       // "true" is the old bool form
             resetRomFolderNavigation();
@@ -3319,17 +3340,28 @@ void Application::run() {
               }
           } }
 
-        // a boot-mounted CIFS share can land after the menu is built
-        { static int s_cifsWatch = -1; static Uint32 s_cifsNext = 0;
-          if (s_cifsWatch < 0) s_cifsWatch = cifsMountPending() ? 1 : 0;
-          if (s_cifsWatch == 1 && SDL_GetTicks() >= s_cifsNext) {
-              s_cifsNext = SDL_GetTicks() + 1000;
-              if (!cifsMountPending()) {
-                  s_cifsWatch = 0;
-                  if (!cifsShareMounted()) {
-                      logMessage(INFO, "cifs", "share not mounted within the boot window");
-                  } else if (cifsDeferredCache) {
-                      cifsDeferredCache = false;
+        // a boot-mounted network share can land after the menu is built
+        { static int s_netWatch = -1; static Uint32 s_netNext = 0;
+          // a scan saved before any share mounted misses its games
+          auto lateScan = [] { const double up = uptimeSeconds(); return netScanBeforeMount && up > 0 && up < 300; };
+          if (s_netWatch < 0) s_netWatch = (netMountPending() || lateScan()) ? 1 : 0;
+          if (s_netWatch == 1 && SDL_GetTicks() >= s_netNext) {
+              s_netNext = SDL_GetTicks() + 1000;
+              const bool mounted = netShareMounted();
+              if (!mounted && (netMountPending() || lateScan())) {
+                  // still inside the boot window
+              } else if (!mounted && netDeferredCache) {
+                  // an unsaved scan keeps waiting past the window
+                  static bool s_lateLogged = false;
+                  if (!s_lateLogged) { s_lateLogged = true; logMessage(INFO, "netshare", "share not mounted within the boot window, still waiting"); }
+                  s_netNext = SDL_GetTicks() + 5000;
+              } else {
+                  s_netWatch = 0;
+                  if (!mounted) {
+                      logMessage(INFO, "netshare", "share not mounted within the boot window");
+                  } else if (netDeferredCache || netScanBeforeMount) {
+                      netDeferredCache = false;
+                      netScanBeforeMount = false;
                       rebuildGameDatabase();
                       m_dirty = true;
                   } else {
@@ -3455,18 +3487,28 @@ void Application::run() {
                             }
                         }
 
-                        if (state.currentMenuLevel == MENU_JOY_TESTER &&
-                            m_evfd[i].vid == m_joyTesterVid && m_evfd[i].pid == m_joyTesterPid) {
-                            if (ev.type == EV_KEY && ev.value != 2) {
+                        if (state.currentMenuLevel == MENU_JOY_TESTER) {
+                            const bool tested = m_evfd[i].vid == m_joyTesterVid && m_evfd[i].pid == m_joyTesterPid;
+                            if (tested && ev.type == EV_KEY && ev.value != 2) {
                                 if (ev.value) m_joyPressed.insert(ev.code);
                                 else          m_joyPressed.erase(ev.code);
                                 m_dirty = true;
-                            } else if (ev.type == EV_ABS && ev.code == ABS_HAT0X) { m_joyHatX = ev.value; m_dirty = true; }
-                            else if (ev.type == EV_ABS && ev.code == ABS_HAT0Y) { m_joyHatY = ev.value; m_dirty = true; }
-                            int selc = JsMapper.buttonCode(10), stac = JsMapper.buttonCode(11);
-                            bool both = selc && stac && m_joyPressed.count(selc) && m_joyPressed.count(stac);
+                            } else if (tested && ev.type == EV_ABS && ev.code == ABS_HAT0X) { m_joyHatX = ev.value; m_dirty = true; }
+                            else if (tested && ev.type == EV_ABS && ev.code == ABS_HAT0Y) { m_joyHatY = ev.value; m_dirty = true; }
+                            else if (tested && ev.type == EV_ABS) updateJoyTesterAxis(m_evfd[i].fd, ev.code, ev.value);
+                            // any pad's Select+Start leaves, the tested pad may not even be plugged in
+                            if (ev.type == EV_KEY && ev.value != 2) {
+                                int selc = tested ? JsMapper.buttonCode(10) : (m_evfd[i].selectCode ? m_evfd[i].selectCode : BTN_SELECT);
+                                int stac = tested ? JsMapper.buttonCode(11) : (m_evfd[i].startCode  ? m_evfd[i].startCode  : BTN_START);
+                                unsigned& held = m_joyEscHeld[i];
+                                if (selc && ev.code == selc) held = ev.value ? (held | 1u) : (held & ~1u);
+                                if (stac && ev.code == stac) held = ev.value ? (held | 2u) : (held & ~2u);
+                                if (ev.code == KEY_ESC && ev.value) m_joyEscSince = SDL_GetTicks() - 3000;
+                            }
+                            bool both = false;
+                            for (int k = 0; k < m_evCount; k++) if (m_joyEscHeld[k] == 3u) both = true;
                             if (both && !m_joyEscSince) m_joyEscSince = SDL_GetTicks();
-                            if (!both) m_joyEscSince = 0;
+                            if (!both && m_joyEscSince && SDL_GetTicks() - m_joyEscSince < 3000) m_joyEscSince = 0;
                         }
 
                         if (ev.type == EV_SYN) continue;
@@ -3512,6 +3554,7 @@ void Application::run() {
                         close(m_evfd[i].fd);
                         m_evfd[i].fd = -1;
                         m_evfd[i].isOpen = 0;
+                        m_inputLost = true;
                         break;
                     }
 
@@ -3720,9 +3763,11 @@ void Application::run() {
             perfRenderMaxUs = perfPresentMaxUs = 0;
             perfRenderedFrames = 0;
 
+            // a pad that drops and rejoins inside one check keeps the node count
             int now = count_event_devices();
-            if (now != last_count) {
+            if (now != last_count || m_inputLost) {
                 last_count = now;
+                m_inputLost = false;
                 openInputDev();
             }
         }

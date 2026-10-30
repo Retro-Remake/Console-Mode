@@ -53,6 +53,13 @@ static inline bool romNaturalLess(const std::string& A, const std::string& B) {
 static inline bool romNameLess(const std::string& a, const std::string& b) {
     return romNaturalLess(romSortKey(a), romSortKey(b));
 }
+// "(Disc 2)", "(Disk B)", "(CD 1)": one disc of a set
+static inline bool hasDiscTag(const std::string& name) {
+    std::string l = name;
+    for (auto& c : l) c = (char)std::tolower((unsigned char)c);
+    return l.find("(disc") != std::string::npos || l.find("(disk") != std::string::npos
+        || l.find("(cd ") != std::string::npos;
+}
 
 struct BluetoothDevice {
     std::string mac;
@@ -92,6 +99,7 @@ private:
     bool lazy = false;                      // folder marker, children not built yet
     std::vector<std::string> lazyExts;      // exts to expand on first open
     int lazyEnterable = -1;                 // -1 unknown / 0 collapses / 1 browsable
+    bool gameFolder = false;                // one game's disc set, sorts among the games
 public:
     Rom(const std::string& name, const std::string& path, std::string launcher = "", bool isFolder=false)
         : name(name), path(path),isFolder(isFolder),launcher(launcher) {isCue = false;}
@@ -145,11 +153,16 @@ public:
         return isCue;
     }
 
+    void setGameFolder(bool g) { gameFolder = g; }
+    bool isGameFolder() const { return gameFolder; }
+
     void SortRoms(){
         std::sort(roms.begin(), roms.end(),
             [](const Rom& a, const Rom& b) {
-                if (a.isFolder != b.isFolder)
-                    return a.isFolder;
+                const bool fa = a.isFolder && !a.isCue && !a.gameFolder;
+                const bool fb = b.isFolder && !b.isCue && !b.gameFolder;
+                if (fa != fb)
+                    return fa;
                 return romNameLess(a.name, b.name);
             }
         );

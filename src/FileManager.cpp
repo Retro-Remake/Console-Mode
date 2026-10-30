@@ -12,6 +12,7 @@
 #include <cctype>
 #include <fstream>
 #include <sstream>
+#include <sys/stat.h>
 
 namespace {
 bool pathIsInTree(const std::filesystem::path& path, const std::filesystem::path& root)
@@ -50,6 +51,28 @@ bool pathMatchesRomExts(const std::filesystem::path& path, const std::vector<std
     }
 
     return false;
+}
+
+// no subfolders and either a single disc image or nothing but tagged discs of one set
+bool folderHoldsOneGame(const std::filesystem::path& dir, const std::vector<std::string>& romExts)
+{
+    std::error_code ec;
+    int launchable = 0, untagged = 0;
+    for (std::filesystem::directory_iterator it(dir, std::filesystem::directory_options::skip_permission_denied, ec), end;
+         !ec && it != end; it.increment(ec)) {
+        std::error_code fec;
+        const std::string fn = it->path().filename().string();
+        if (it->is_directory(fec)) {
+            if (!shouldSkipGameDirectory(fn)) return false;
+            continue;
+        }
+        if (!pathMatchesRomExts(it->path(), romExts)) continue;
+        const std::string ext = lowerCopy(it->path().extension().string());
+        if (ext == ".bin" || ext == ".img" || ext == ".m3u") continue;
+        launchable++;
+        if (!hasDiscTag(fn)) untagged++;
+    }
+    return launchable == 1 || (launchable > 0 && untagged == 0);
 }
 
 bool directoryContainsRomRecursive(const std::filesystem::path& dir, const std::vector<std::string>& romExts)
@@ -137,6 +160,7 @@ std::vector<FileItem> FileManager::getFileItemsByExts(const std::string& folder,
                     FileItem fi;
                     fi.fileName = filename;
                     fi.isFolder = true;
+                    fi.gameFolder = folderHoldsOneGame(entry.path(), romExts);
                     fileItems.push_back(fi);
                 }
             }
@@ -148,8 +172,10 @@ std::vector<FileItem> FileManager::getFileItemsByExts(const std::string& folder,
     
     std::sort(fileItems.begin(), fileItems.end(), 
               [](const FileItem& a, const FileItem& b) {
-                  if (a.isFolder != b.isFolder)
-                      return a.isFolder;
+                  const bool fa = a.isFolder && !a.gameFolder;
+                  const bool fb = b.isFolder && !b.gameFolder;
+                  if (fa != fb)
+                      return fa;
                   return romNameLess(a.fileName, b.fileName);
               });
     return fileItems;
@@ -182,6 +208,18 @@ std::vector<std::string> FileManager::getFiles(const std::string& folder, const 
     return files;
 }
 
+// data dirs and mounted shares never hold cores
+static bool skipForRbfScan(const std::filesystem::path& p, dev_t rootDev)
+{
+    static const std::set<std::string> kSkip = {
+        "games", "cifs", "Saves", "savestates", "screenshots", "ConsoleMode", "linux", "config",
+        "Scripts", "docs", "Filters", "Filters_Audio", "Gamma", "Shadow_Masks", "Presets", "wallpapers",
+        "MiSTer INI Backup" };
+    if (kSkip.count(p.filename().string())) return true;
+    struct stat st;
+    return stat(p.c_str(), &st) == 0 && st.st_dev != rootDev;
+}
+
 static void collectRbfPaths(const std::filesystem::path& dir, std::vector<std::string>& vecAllRbfFiles)
 {
     std::error_code lec;
@@ -201,6 +239,8 @@ static void scanRbfLevel(const std::filesystem::path& dir,
                          std::vector<std::string>& vecAllRbfFiles, std::vector<Rom>& out,
                          bool isRoot = false)
 {
+    struct stat rootSt;
+    const dev_t rootDev = stat(dir.c_str(), &rootSt) == 0 ? rootSt.st_dev : 0;
     std::vector<Rom> folders, cores;
     std::error_code lec;
     auto options = std::filesystem::directory_options::skip_permission_denied;
@@ -210,7 +250,10 @@ static void scanRbfLevel(const std::filesystem::path& dir,
         std::error_code fec;
         if (it->is_symlink(fec)) continue;
         if (it->is_directory(fec)) {
-            if (filename[0] != '_') { collectRbfPaths(it->path(), vecAllRbfFiles); continue; }
+            if (filename[0] != '_') {
+                if (!isRoot || !skipForRbfScan(it->path(), rootDev)) collectRbfPaths(it->path(), vecAllRbfFiles);
+                continue;
+            }
             Rom folder(filename.substr(1), it->path(), "", true);
             scanRbfLevel(it->path(), vecAllRbfFiles, folder.getRoms());
             if (!folder.getRoms().empty()) folders.push_back(folder);

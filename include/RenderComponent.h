@@ -127,7 +127,7 @@ public:
         m_titleFilter = (v == "Region") ? TF_REGION
                       : (v == "Ext. + Region") ? TF_EXT_REGION : TF_EXT;
     }
-    virtual std::string applyTitleFilter(const std::string& name) const = 0;
+    virtual std::string applyTitleFilter(const std::string& name, bool stripPath = true) const = 0;
     // ~88% of a 4:3 frame, clamped to the CRT safe area
     int menuStartY() const {
         return theme.metricSet(Configuration::FOLDER_LIST_Y) ? theme.getIntValue(Configuration::FOLDER_LIST_Y) : mainmenustartY;
